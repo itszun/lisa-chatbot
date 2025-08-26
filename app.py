@@ -14,7 +14,7 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 # Gunakan environment variable, JANGAN hardcode API key
 # Windows (PowerShell):  $env:OPENAI_API_KEY="sk-xxxx"
 # Linux/Mac:             export OPENAI_API_KEY="sk-xxxx"
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # Simpan histori per sesi di memori (untuk demo lokal)
 SESSIONS = {}
