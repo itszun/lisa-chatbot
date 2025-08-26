@@ -6,7 +6,7 @@ from openai import OpenAI
 # --- PENGATURAN PENTING ---
 # Ganti dengan kunci API OpenAI Anda. Sangat disarankan menggunakan environment variable.
 # contoh: client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # === LANGKAH 1: DEFINISIKAN FUNGSI / ALAT YANG BISA DIGUNAKAN ===
 

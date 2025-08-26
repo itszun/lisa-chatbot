@@ -1,0 +1,16 @@
+services:
+  web:
+    build: ./nginx
+    ports:
+      - "8050:80"
+    depends_on:
+      - app
+    volumes:
+      - ./nginx:/etc/nginx/conf.d
+      - ./app/static:/usr/share/nginx/html/static
+
+  app:
+    build: ./app
+    command: gunicorn --workers 4 --bind 0.0.0.0:5000 wsgi:app
+    volumes:
+      - ./app:/usr/src/app
