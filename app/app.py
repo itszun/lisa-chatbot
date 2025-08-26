@@ -5,11 +5,13 @@ import requests
 from uuid import uuid4
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, render_template
+from flask_cors import CORS
 from openai import OpenAI
 
 # === Inisialisasi ===
 load_dotenv()
 app = Flask(__name__, static_folder="static", template_folder="templates")
+CORS(app)
 
 # Gunakan environment variable, JANGAN hardcode API key
 # Windows (PowerShell):  $env:OPENAI_API_KEY="sk-xxxx"
@@ -147,7 +149,10 @@ def chat():
     user_msg = data.get("message", "").strip()
 
     if not sid or sid not in SESSIONS:
-        return jsonify({"error": "session_id tidak valid. Buat sesi baru."}), 400
+        # return jsonify({"error": "session_id tidak valid. Buat sesi baru."}), 400
+        SESSIONS[sid] = [
+            {"role": "system", "content": "Act as HR Assistant"}
+        ]
     if not user_msg:
         return jsonify({"error": "Pesan kosong."}), 400
 
