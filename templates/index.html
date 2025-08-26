@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pokémon Assistant</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <header class="app-header">
+    <div class="branding">
+      <div class="logo">🔮</div>
+      <div class="title">
+        <h1 id="app-title">Pokémon Assistant</h1>
+        <p id="app-subtitle">Tanyakan apa saja tentang Pokémon</p>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="resetBtn" class="btn ghost" title="Mulai sesi baru">Reset</button>
+      <a class="btn link" href="https://pokeapi.co/" target="_blank" rel="noopener">PokeAPI</a>
+    </div>
+  </header>
+
+  <main class="chat-shell">
+    <div id="chat" class="chat-window" aria-live="polite" aria-label="Ruang percakapan">
+      <!-- Pesan akan ditambahkan via JS -->
+    </div>
+
+    <form id="composer" class="composer" autocomplete="off">
+      <textarea id="input" rows="1" placeholder="Ketik pertanyaan Anda... (Shift+Enter untuk baris baru)"></textarea>
+      <button id="sendBtn" class="btn primary" type="submit" aria-label="Kirim">Kirim</button>
+    </form>
+  </main>
+
+  <footer class="app-footer">
+    <small>
+      Berjalan lokal. API key disimpan di server (Flask). Jangan taruh API key di browser.
+    </small>
+  </footer>
+
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
