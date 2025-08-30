@@ -33,7 +33,7 @@ DEFAULT_SYSTEM_PROMPT = (
 
 @app.route("/")
 def index():
-    return render_template("index.html") if os.path.exists("lisa-chatbot/app/templates") else "OK"
+    return render_template("index.html") if os.path.exists("app/templates") else "OK"
 
 @app.route("/api/session", methods=["POST"])
 def create_session():
