@@ -1,135 +1,39 @@
 # app.py
 import os
 import json
-import requests
 from uuid import uuid4
+
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from openai import OpenAI
+
+from api_client import ensure_token, set_token
+from tools_registry import tools as TOOLS_SPEC, available_functions as AVAILABLE_FUNCS
 
 # === Inisialisasi ===
 load_dotenv()
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
 
-# Gunakan environment variable, JANGAN hardcode API key
-# Windows (PowerShell):  $env:OPENAI_API_KEY="sk-xxxx"
-# Linux/Mac:             export OPENAI_API_KEY="sk-xxxx"
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    raise RuntimeError("OPENAI_API_KEY belum diisi.")
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Simpan histori per sesi di memori (untuk demo lokal)
 SESSIONS = {}
 
-# === FUNGSI (TOOLS) ===
-def get_pokemon_info(name: str):
-    """Mengambil informasi umum tentang Pokémon seperti ID, tinggi, dan berat."""
-    url = f"https://pokeapi.co/api/v2/pokemon/{name.lower()}"
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        info = {
-            "name": data["name"],
-            "id": data["id"],
-            "height": f"{data['height'] / 10} m",
-            "weight": f"{data['weight'] / 10} kg",
-        }
-        return json.dumps(info)
-    except requests.exceptions.HTTPError:
-        return json.dumps({"error": f"Pokémon '{name}' tidak ditemukan."})
-    except requests.exceptions.RequestException as e:
-        return json.dumps({"error": f"Masalah koneksi: {e}"})
-
-def get_pokemon_abilities(name: str):
-    """Mendapatkan daftar kemampuan (abilities) dari Pokémon tertentu."""
-    url = f"https://pokeapi.co/api/v2/pokemon/{name.lower()}"
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        abilities = [ability["ability"]["name"] for ability in data["abilities"]]
-        return json.dumps({"name": data["name"], "abilities": abilities})
-    except requests.exceptions.HTTPError:
-        return json.dumps({"error": f"Pokémon '{name}' tidak ditemukan."})
-    except requests.exceptions.RequestException as e:
-        return json.dumps({"error": f"Masalah koneksi: {e}"})
-
-def get_pokemon_types(name: str):
-    """Mendapatkan daftar tipe (misalnya fire, water, grass) dari Pokémon tertentu."""
-    url = f"https://pokeapi.co/api/v2/pokemon/{name.lower()}"
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        types = [t["type"]["name"] for t in data["types"]]
-        return json.dumps({"name": data["name"], "types": types})
-    except requests.exceptions.HTTPError:
-        return json.dumps({"error": f"Pokémon '{name}' tidak ditemukan."})
-    except requests.exceptions.RequestException as e:
-        return json.dumps({"error": f"Masalah koneksi: {e}"})
-
-TOOLS_SPEC = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_pokemon_info",
-            "description": "Dapatkan data umum (ID, tinggi, berat) dari Pokémon berdasarkan namanya.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Nama Pokémon, contoh: Pikachu"}
-                },
-                "required": ["name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_pokemon_abilities",
-            "description": "Dapatkan daftar semua kemampuan (ability) dari Pokémon tertentu.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Nama Pokémon, contoh: Snorlax"}
-                },
-                "required": ["name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_pokemon_types",
-            "description": "Dapatkan tipe elemen dari Pokémon tertentu (misal: fire, water, electric).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Nama Pokémon, contoh: Bulbasaur"}
-                },
-                "required": ["name"],
-            },
-        },
-    },
-]
-
-AVAILABLE_FUNCS = {
-    "get_pokemon_info": get_pokemon_info,
-    "get_pokemon_abilities": get_pokemon_abilities,
-    "get_pokemon_types": get_pokemon_types,
-}
-
 DEFAULT_SYSTEM_PROMPT = (
-    "You are a helpful Pokémon assistant. "
-    "Answer the user's questions based on the function results. "
-    "If a Pokémon tidak ditemukan, jelaskan dengan ramah."
+    "You are a helpful assistant for a remote Admin API. "
+    "Use the tools to perform CRUD on resources under /api/{panel}/... "
+    "Prefer concise answers, show key fields only. "
+    "If an operation fails, return a short, actionable error message."
 )
 
-# === ROUTES ===
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html") if os.path.exists("app/templates") else "OK"
 
 @app.route("/api/session", methods=["POST"])
 def create_session():
@@ -137,24 +41,54 @@ def create_session():
     system_prompt = body.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
 
     sid = str(uuid4())
-    SESSIONS[sid] = [
-        {"role": "system", "content": system_prompt}
-    ]
+    SESSIONS[sid] = [{"role": "system", "content": system_prompt}]
     return jsonify({"session_id": sid})
+
+def _extract_bearer_token(req) -> str:
+    # Prioritas: Authorization header
+    auth = (req.headers.get("Authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ", 1)[1].strip()
+    # Alternatif: X-Api-Token header
+    x = (req.headers.get("X-Api-Token") or "").strip()
+    if x:
+        return x
+    # Alternatif: body.token (tidak disarankan, tapi kadang berguna)
+    try:
+        data = req.get_json(silent=True) or {}
+        if isinstance(data, dict):
+            t = (data.get("token") or "").strip()
+            if t:
+                return t
+    except Exception:
+        pass
+    return ""
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
     data = request.get_json(force=True)
     sid = data.get("session_id")
-    user_msg = data.get("message", "").strip()
+    user_msg = (data.get("message") or "").strip()
 
+    # Pastikan sesi
     if not sid or sid not in SESSIONS:
-        # return jsonify({"error": "session_id tidak valid. Buat sesi baru."}), 400
-        SESSIONS[sid] = [
-            {"role": "system", "content": "Act as HR Assistant"}
-        ]
+        # Buat sesi minimal bila klien tidak create dulu
+        sid = str(uuid4())
+        SESSIONS[sid] = [{"role": "system", "content": DEFAULT_SYSTEM_PROMPT}]
+
     if not user_msg:
-        return jsonify({"error": "Pesan kosong."}), 400
+        return jsonify({"error": "Pesan kosong.", "session_id": sid}), 400
+
+    # === Pastikan token Admin API tersedia ===
+    try:
+        incoming_token = _extract_bearer_token(request)
+        # Akan:
+        # - pakai token dari header kalau ada (validasi singkat)
+        # - kalau tidak ada, coba cache atau LOGIN_EMAIL/PASSWORD (lihat api_client.ensure_token)
+        ensure_token(preferred_token=incoming_token if incoming_token else None)
+    except Exception as e:
+        # Balikkan pesan yang jelas untuk frontend
+        return jsonify({"error": f"Auth Admin API gagal: {str(e)}", "session_id": sid}), 401
 
     messages = SESSIONS[sid]
     messages.append({"role": "user", "content": user_msg})
@@ -197,17 +131,21 @@ def chat():
             for tc in tool_calls:
                 fname = tc.function.name
                 fargs = json.loads(tc.function.arguments or "{}")
-                result = AVAILABLE_FUNCS[fname](fargs.get("name"))
-                tool_runs.append(
-                    {"name": fname, "args": fargs, "result": json.loads(result)}
-                )
+                try:
+                    # Catatan: fungsi-fungsi Admin API punya parameter beragam.
+                    # Kita panggil dengan **fargs agar fleksibel (tidak hanya 'name').
+                    out = AVAILABLE_FUNCS[fname](**fargs)
+                    result_json = json.dumps(out, ensure_ascii=False)
+                except Exception as fn_err:
+                    result_json = json.dumps({"error": str(fn_err)}, ensure_ascii=False)
 
+                tool_runs.append({"name": fname, "args": fargs, "result": json.loads(result_json)})
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "name": fname,
-                        "content": result,  # JSON string
+                        "content": result_json,
                     }
                 )
 
@@ -222,6 +160,7 @@ def chat():
 
             return jsonify(
                 {
+                    "session_id": sid,
                     "answer": final_text,
                     "tool_runs": tool_runs,
                 }
@@ -230,13 +169,13 @@ def chat():
         # Tanpa tool call, langsung jawab
         final_text = resp_msg.content or ""
         messages.append({"role": "assistant", "content": final_text})
-        return jsonify({"answer": final_text, "tool_runs": []})
+        return jsonify({"session_id": sid, "answer": final_text, "tool_runs": []})
 
     except Exception as e:
-        # Tangani error dengan aman (tanpa membocorkan key / stack detail)
-        return jsonify({"error": f"Gagal memproses: {type(e).__name__}"}), 500
+        return jsonify({"error": f"Gagal memproses: {type(e).__name__}", "session_id": sid}), 500
 
 if __name__ == "__main__":
-    # Jalankan server lokal
     port = int(os.environ.get("PORT", "5000"))
-    app.run(host="127.0.0.1", port=port, debug=True)
+
+    # Gunakan 0.0.0.0 kalau mau diakses dari luar host
+    app.run(host=os.environ.get("HOST", "127.0.0.1"), port=port, debug=True)
