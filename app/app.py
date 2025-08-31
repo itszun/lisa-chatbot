@@ -2,14 +2,19 @@
 import os
 import json
 from uuid import uuid4
+import datetime
 
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from openai import OpenAI
 
-from api_client import ensure_token, set_token
+from api_client import ensure_token
 from tools_registry import tools as TOOLS_SPEC, available_functions as AVAILABLE_FUNCS
+
+# Batas maksimal pesan dalam histori untuk dikirim ke AI
+# (selain pesan sistem)
+MAX_HISTORY_MESSAGES = 50
 
 # === Inisialisasi ===
 load_dotenv()
@@ -21,19 +26,58 @@ if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY belum diisi.")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+# === Konfigurasi dan pembuatan direktori log ===
+API_LOG_DIR = os.getenv("API_LOG_DIR", "./logs")
+os.makedirs(API_LOG_DIR, exist_ok=True)
+# ==========================================================
+
 # Simpan histori per sesi di memori (untuk demo lokal)
 SESSIONS = {}
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are a helpful assistant for a remote Admin API. "
-    "Use the tools to perform CRUD on resources under /api/{panel}/... "
-    "Prefer concise answers, show key fields only. "
-    "If an operation fails, return a short, actionable error message."
+    "Anda adalah asisten yang membantu untuk sebuah Admin API. "
+    "Gunakan tools yang tersedia untuk melakukan operasi CRUD. "
+    "Berikan jawaban yang ringkas, hanya tampilkan field-field kunci. "
+    "Jika sebuah operasi gagal, berikan pesan error yang singkat dan jelas. "
+    "Selalu balas dalam Bahasa Indonesia. "
+    "Saat menjelaskan sesuatu, JANGAN GUNAKAN FORMAT MARKDOWN seperti bintang (`**`) untuk bold atau tanda hubung (`-`) untuk daftar. "
+    "Gunakan kalimat lengkap dalam bentuk paragraf atau daftar bernomor (1., 2., 3.) jika diperlukan untuk membuat penjelasan yang rapi dan mudah dibaca."
 )
+
+def _log_tool_call(session_id: str, function_name: str, args: dict, result: any):
+    """Mencatat pemanggilan tool ke file log yang unik per panggilan."""
+    try:
+        now = datetime.datetime.now()
+        
+        # <-- KODE DIPERBAIKI: Format nama file menyertakan jam agar tidak saling menimpa -->
+        timestamp_safe = now.strftime("%Y-%m-%d_%H-%M-%S")
+        short_sid = session_id[:8]
+        log_filename = f"{timestamp_safe}__{function_name}_{short_sid}.log"
+        log_path = os.path.join(API_LOG_DIR, log_filename)
+
+        # Format argumen dan hasil
+        args_str = json.dumps(args, ensure_ascii=False)
+        result_str = json.dumps(result, ensure_ascii=False, indent=2)
+
+        # Format header untuk konten file
+        header_line = f"[{now.strftime('%Y/%m/%d %H:%M:%S')}] [{session_id}]"
+
+        # Buat entri log
+        log_entry = (
+            f"{header_line}\n"
+            f"{function_name}({args_str})\n"
+            f"{result_str}\n"
+        )
+
+        with open(log_path, 'w', encoding='utf-8') as f:
+            f.write(log_entry)
+            
+    except Exception as e:
+        print(f"!! Gagal menulis log: {e}")
 
 @app.route("/")
 def index():
-    return render_template("index.html") if os.path.exists("app/templates") else "OK"
+    return render_template("index.html") if os.path.exists("lisa-chatbot/app/templates/index.html") else "OK"
 
 @app.route("/api/session", methods=["POST"])
 def create_session():
@@ -70,31 +114,32 @@ def chat():
     sid = data.get("session_id")
     user_msg = (data.get("message") or "").strip()
 
-    # Pastikan sesi
     if not sid or sid not in SESSIONS:
-        # Buat sesi minimal bila klien tidak create dulu
         sid = str(uuid4())
         SESSIONS[sid] = [{"role": "system", "content": DEFAULT_SYSTEM_PROMPT}]
 
     if not user_msg:
         return jsonify({"error": "Pesan kosong.", "session_id": sid}), 400
 
-    # === Pastikan token Admin API tersedia ===
     try:
         incoming_token = _extract_bearer_token(request)
-        # Akan:
-        # - pakai token dari header kalau ada (validasi singkat)
-        # - kalau tidak ada, coba cache atau LOGIN_EMAIL/PASSWORD (lihat api_client.ensure_token)
         ensure_token(preferred_token=incoming_token if incoming_token else None)
     except Exception as e:
-        # Balikkan pesan yang jelas untuk frontend
         return jsonify({"error": f"Auth Admin API gagal: {str(e)}", "session_id": sid}), 401
 
     messages = SESSIONS[sid]
+
+    # <-- KODE DIPERBAIKI: Logika Sliding Window ditempatkan di sini -->
+    # Jika histori lebih panjang dari batas, potong histori lama.
+    if len(messages) > MAX_HISTORY_MESSAGES:
+        # Selalu simpan pesan pertama (system prompt) dan X pesan terakhir.
+        messages = [messages[0]] + messages[-MAX_HISTORY_MESSAGES:]
+        SESSIONS[sid] = messages # Simpan kembali histori yang sudah dipotong
+    # -------------------------------------------------------------
+
     messages.append({"role": "user", "content": user_msg})
 
     try:
-        # --- Panggilan pertama: putuskan perlu tool atau tidak ---
         first = client.chat.completions.create(
             model="gpt-4o",
             messages=messages,
@@ -105,11 +150,9 @@ def chat():
 
         resp_msg = first.choices[0].message
         tool_calls = getattr(resp_msg, "tool_calls", None)
-
-        tool_runs = []  # untuk dikirim ke frontend sebagai jejak (trace)
+        tool_runs = []
 
         if tool_calls:
-            # Tambahkan pesan assistant yang berisi instruksi tool_calls
             assistant_msg = {
                 "role": "assistant",
                 "content": resp_msg.content or None,
@@ -127,17 +170,17 @@ def chat():
             }
             messages.append(assistant_msg)
 
-            # Jalankan setiap tool yang diminta
             for tc in tool_calls:
                 fname = tc.function.name
                 fargs = json.loads(tc.function.arguments or "{}")
                 try:
-                    # Catatan: fungsi-fungsi Admin API punya parameter beragam.
-                    # Kita panggil dengan **fargs agar fleksibel (tidak hanya 'name').
                     out = AVAILABLE_FUNCS[fname](**fargs)
+                    _log_tool_call(sid, fname, fargs, out)
                     result_json = json.dumps(out, ensure_ascii=False)
                 except Exception as fn_err:
-                    result_json = json.dumps({"error": str(fn_err)}, ensure_ascii=False)
+                    err_obj = {"error": str(fn_err)}
+                    _log_tool_call(sid, fname, fargs, err_obj)
+                    result_json = json.dumps(err_obj, ensure_ascii=False)
 
                 tool_runs.append({"name": fname, "args": fargs, "result": json.loads(result_json)})
                 messages.append(
@@ -149,7 +192,6 @@ def chat():
                     }
                 )
 
-            # --- Panggilan kedua: susun jawaban akhir ---
             second = client.chat.completions.create(
                 model="gpt-4o",
                 messages=messages,
@@ -166,7 +208,6 @@ def chat():
                 }
             )
 
-        # Tanpa tool call, langsung jawab
         final_text = resp_msg.content or ""
         messages.append({"role": "assistant", "content": final_text})
         return jsonify({"session_id": sid, "answer": final_text, "tool_runs": []})
@@ -176,6 +217,4 @@ def chat():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
-
-    # Gunakan 0.0.0.0 kalau mau diakses dari luar host
     app.run(host=os.environ.get("HOST", "127.0.0.1"), port=port, debug=True)
