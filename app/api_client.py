@@ -18,7 +18,7 @@ except Exception:
     pass
 
 # ===================== KONFIG DASAR =====================
-BASE_URL = os.getenv("REMOTE_BASE_URL", "").rstrip("/")
+BASE_URL = os.getenv("REMOTE_BASE_URL", "https://lisa.malikaljun.com").rstrip("/")
 if not BASE_URL:
     raise RuntimeError("REMOTE_BASE_URL belum diisi. Contoh: https://lisa.malikaljun.com")
 
@@ -293,8 +293,29 @@ def list_talent(page: int = 1, per_page: int = 10, search: Optional[str] = None)
 def get_talent_detail(talent_id: int):
     return relogin_once_on_401(_get_detail, "talent", talent_id)
 
-def create_talent(name: str, position: str, birthdate: str, summary: str):
-    payload = {"name": name, "position": position, "birthdate": birthdate, "summary": summary}
+def create_talent(
+    name: str,
+    position: str,
+    birthdate: str,
+    summary: str,
+    skills: List[str],
+    educations: List[Dict[str, Any]]
+):
+    """
+    Membuat data talent baru.
+    Parameter skills dan educations sekarang wajib diisi.
+    """
+    payload = {
+        "name": name,
+        "position": position,
+        "birthdate": birthdate,
+        "summary": summary,
+    }
+
+    # Langsung ubah ke JSON string karena parameter ini wajib ada
+    payload["skills"] = json.dumps(skills)
+    payload["educations"] = json.dumps(educations)
+        
     return relogin_once_on_401(_create_resource, "talent", payload)
 
 def update_talent(talent_id: int, name: Optional[str] = None, position: Optional[str] = None,
@@ -310,21 +331,70 @@ def delete_talent(talent_id: int):
     return relogin_once_on_401(_delete_resource, "talent", talent_id)
 
 # ===================== RESOURCE: CANDIDATES =====================
+# ===================== RESOURCE: CANDIDATES =====================
 def list_candidates(page: int = 1, per_page: int = 10, search: Optional[str] = None):
     return relogin_once_on_401(_list_resource, "candidates", page, per_page, search)
 
 def get_candidate_detail(candidate_id: int):
     return relogin_once_on_401(_get_detail, "candidates", candidate_id)
 
-def create_candidate(payload: Dict[str, Any]):
+def create_candidate(
+    name: str,
+    email: str,
+    phone: Optional[str] = None,
+    position_applied: Optional[str] = None,
+    status: Optional[str] = None
+):
+    """
+    Membuat kandidat baru.
+
+    Args:
+        name: Nama lengkap kandidat (wajib).
+        email: Alamat email kandidat (wajib).
+        phone: Nomor telepon (opsional).
+        position_applied: Posisi yang dilamar (opsional).
+        status: Status kandidat, cth: "new", "interview" (opsional).
+    """
+    payload = {"name": name, "email": email}
+    if phone is not None:
+        payload["phone"] = phone
+    if position_applied is not None:
+        payload["position_applied"] = position_applied
+    if status is not None:
+        payload["status"] = status
+        
     return relogin_once_on_401(_create_resource, "candidates", payload)
 
-def update_candidate(candidate_id: int, payload: Dict[str, Any]):
+def update_candidate(
+    candidate_id: int,
+    name: Optional[str] = None,
+    email: Optional[str] = None,
+    phone: Optional[str] = None,
+    position_applied: Optional[str] = None,
+    status: Optional[str] = None
+):
+    """
+    Memperbarui data seorang kandidat.
+    """
+    payload: Dict[str, Any] = {}
+    if name is not None:
+        payload["name"] = name
+    if email is not None:
+        payload["email"] = email
+    if phone is not None:
+        payload["phone"] = phone
+    if position_applied is not None:
+        payload["position_applied"] = position_applied
+    if status is not None:
+        payload["status"] = status
+
+    if not payload:
+        return {"message": "Tidak ada data yang diperbarui."}
+        
     return relogin_once_on_401(_update_resource, "candidates", candidate_id, payload)
 
 def delete_candidate(candidate_id: int):
     return relogin_once_on_401(_delete_resource, "candidates", candidate_id)
-
 # ===================== RESOURCE: COMPANIES =====================
 def list_companies(page: int = 1, per_page: int = 10, search: Optional[str] = None):
     return relogin_once_on_401(_list_resource, "companies", page, per_page, search)
@@ -332,14 +402,44 @@ def list_companies(page: int = 1, per_page: int = 10, search: Optional[str] = No
 def get_company_detail(company_id: int):
     return relogin_once_on_401(_get_detail, "companies", company_id)
 
-def create_company(payload: Dict[str, Any]):
+def create_company(name: str, description: Optional[str] = None, status: Optional[int] = None):
+    """
+    Membuat perusahaan baru.
+
+    Args:
+        name: Nama perusahaan (wajib).
+        description: Deskripsi perusahaan (opsional).
+        status: Status perusahaan (opsional).
+    """
+    payload = {"name": name}
+    if description is not None:
+        payload["description"] = description
+    if status is not None:
+        payload["status"] = status
     return relogin_once_on_401(_create_resource, "companies", payload)
 
-def update_company(company_id: int, payload: Dict[str, Any]):
+def update_company(company_id: int, name: Optional[str] = None, description: Optional[str] = None, status: Optional[int] = None):
+    """
+    Memperbarui data perusahaan.
+    Hanya field yang diisi yang akan dikirim untuk diperbarui.
+    """
+    payload: Dict[str, Any] = {}
+    if name is not None:
+        payload["name"] = name
+    if description is not None:
+        payload["description"] = description
+    if status is not None:
+        payload["status"] = status
+    
+    if not payload:
+        # Jika tidak ada data yang diubah, tidak perlu panggil API
+        return {"message": "Tidak ada data yang diperbarui."}
+        
     return relogin_once_on_401(_update_resource, "companies", company_id, payload)
 
 def delete_company(company_id: int):
     return relogin_once_on_401(_delete_resource, "companies", company_id)
+
 
 # ===================== RESOURCE: COMPANY PROPERTIES =====================
 def list_company_properties(page: int = 1, per_page: int = 10, search: Optional[str] = None):
@@ -348,10 +448,35 @@ def list_company_properties(page: int = 1, per_page: int = 10, search: Optional[
 def get_company_property_detail(prop_id: int):
     return relogin_once_on_401(_get_detail, "company-properties", prop_id)
 
-def create_company_property(payload: Dict[str, Any]):
+def create_company_property(company_id: int, name: str, value: Any):
+    """
+    Membuat properti baru (misal: NPWP, SIUP) untuk sebuah perusahaan.
+
+    Args:
+        company_id: ID dari perusahaan pemilik properti.
+        name: Nama properti (contoh: "NPWP").
+        value: Nilai dari properti (contoh: "12.345.678.9-012.000").
+    """
+    payload = {
+        "company_id": company_id,
+        "name": name,
+        "value": value
+    }
     return relogin_once_on_401(_create_resource, "company-properties", payload)
 
-def update_company_property(prop_id: int, payload: Dict[str, Any]):
+def update_company_property(prop_id: int, name: Optional[str] = None, value: Optional[Any] = None):
+    """
+    Memperbarui nama atau nilai dari sebuah properti perusahaan.
+    """
+    payload: Dict[str, Any] = {}
+    if name is not None:
+        payload["name"] = name
+    if value is not None:
+        payload["value"] = value
+
+    if not payload:
+        return {"message": "Tidak ada data yang diperbarui."}
+        
     return relogin_once_on_401(_update_resource, "company-properties", prop_id, payload)
 
 def delete_company_property(prop_id: int):
@@ -364,11 +489,91 @@ def list_job_openings(page: int = 1, per_page: int = 10, search: Optional[str] =
 def get_job_opening_detail(opening_id: int):
     return relogin_once_on_401(_get_detail, "job-openings", opening_id)
 
-def create_job_opening(payload: Dict[str, Any]):
+def create_job_opening(
+    company_id: int,
+    title: str,
+    body: Optional[str] = None,
+    due_date: Optional[str] = None,
+    status: Optional[int] = None
+):
+    """
+    Membuat lowongan pekerjaan baru dengan memvalidasi company_id terlebih dahulu.
+    """
+    # Langkah 1: Validasi keberadaan perusahaan dengan ID yang diberikan.
+    try:
+        company_data = get_company_detail(company_id=company_id)
+        if not company_data or not isinstance(company_data, dict):
+             raise ValueError("Data perusahaan tidak valid.")
+        print(f"Validasi berhasil: Perusahaan dengan ID {company_id} ditemukan (Nama: {company_data.get('name')}).")
+    except Exception as e:
+        # Jika get_company_detail gagal (misalnya 404 Not Found), kembalikan error.
+        return {"error": f"Perusahaan dengan ID {company_id} tidak ditemukan. Silakan gunakan ID perusahaan yang valid atau buat data perusahaan baru terlebih dahulu."}
+
+    # Langkah 2: Jika validasi berhasil, lanjutkan membuat lowongan.
+    payload = {
+        "company_id": company_id,
+        "title": title,
+    }
+    if body is not None:
+        payload["body"] = body
+    if due_date is not None:
+        payload["due_date"] = due_date
+    if status is not None:
+        payload["status"] = status
+        
     return relogin_once_on_401(_create_resource, "job-openings", payload)
 
-def update_job_opening(opening_id: int, payload: Dict[str, Any]):
+def update_job_opening(
+    opening_id: int,
+    company_id: int = None,
+    title: str = None,
+    body: str = None,
+    due_date: str = None,
+    status: str = None
+):
+    """Memperbarui data lowongan pekerjaan."""
+    payload: Dict[str, Any] = {}
+    if company_id is not None:
+        payload["company_id"] = company_id
+    if title is not None:
+        payload["title"] = title
+    if body is not None:
+        payload["body"] = body
+    if due_date is not None:
+        payload["due_date"] = due_date
+    if status is not None:
+        payload["status"] = status
+
+    if not payload:
+        return {"message": "Tidak ada data yang diperbarui."}
+        
     return relogin_once_on_401(_update_resource, "job-openings", opening_id, payload)
 
 def delete_job_opening(opening_id: int):
     return relogin_once_on_401(_delete_resource, "job-openings", opening_id)
+
+    """
+    Membuat lowongan pekerjaan dengan mencari perusahaan berdasarkan NAMA.
+    Jika perusahaan tidak ditemukan, akan mengembalikan error.
+    """
+    # Langkah 1: Cari perusahaan berdasarkan nama untuk mendapatkan ID-nya.
+    # Kita hanya butuh 1 hasil yang paling relevan.
+    found_companies = list_companies(search=company_name, per_page=1)
+
+    if not found_companies:
+        return {"error": f"Perusahaan '{company_name}' tidak ditemukan. Silakan buat perusahaan terlebih dahulu."}
+
+    # Ambil ID dari perusahaan yang ditemukan
+    company_id = found_companies[0].get("id")
+    if not company_id:
+        return {"error": f"Gagal mendapatkan ID untuk perusahaan '{company_name}'."}
+
+    # Langkah 2: Setelah ID didapat, panggil fungsi create_job_opening yang sudah ada.
+    print(f"Perusahaan '{company_name}' ditemukan dengan ID: {company_id}. Membuat lowongan pekerjaan...")
+    return create_job_opening(
+        company_id=company_id,
+        title=title,
+        body=body,
+        due_date=due_date,
+        status=status
+    )
