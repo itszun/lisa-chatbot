@@ -1,43 +1,403 @@
-<!doctype html>
+Tentu, ini adalah program HTML lengkap yang dirancang untuk berinteraksi dengan semua fitur di file app.py yang baru Anda berikan.
+## Fitur Utama Tampilan Ini
+ * Antarmuka Dua Kolom: Di sebelah kiri adalah panel chat untuk percakapan, dan di sebelah kanan adalah panel informasi untuk menampilkan hasil rekomendasi.
+ * Input User ID Dinamis: Anda bisa memasukkan user_id apapun untuk memulai sesi, memudahkan pengujian sebagai talent atau company.
+ * Tombol Aksi: Terdapat tombol "Mulai Sesi", "Info Rekrutmen", dan "Reset Chat" yang terhubung langsung ke endpoint API yang sesuai.
+ * Panel Informasi Interaktif: Panel di sebelah kanan akan menampilkan:
+   * Profil singkat talent yang sedang dianalisis.
+   * Pesan outreach yang sudah diformat.
+   * Hasil peringkat lowongan dari model AI, lengkap dengan skor dan alasan.
+   * Daftar lowongan pekerjaan terbaru.
+ * Desain Responsif: Tampilan akan otomatis menyesuaikan menjadi satu kolom di perangkat mobile.
+## Kode Lengkap index.html
+Salin semua kode di bawah ini dan simpan ke dalam file templates/index.html. File ini sudah berisi HTML, CSS, dan JavaScript dalam satu paket.
+<!DOCTYPE html>
 <html lang="id">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pokémon Assistant</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LISA - Recruitment Assistant</title>
+    <style>
+        :root {
+            --primary-color: #4a90e2;
+            --secondary-color: #f4f7f9;
+            --text-color: #333;
+            --border-color: #e0e0e0;
+            --bot-bg: #e9ecef;
+            --user-bg: #4a90e2;
+            --font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            --border-radius: 8px;
+            --box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        * { box-sizing: border-box; }
+        body {
+            font-family: var(--font-family);
+            background-color: var(--secondary-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: var(--text-color);
+        }
+        .main-container {
+            display: flex;
+            width: 100%;
+            max-width: 1200px;
+            height: 95vh;
+            background: #fff;
+            border-radius: var(--border-radius);
+            box-shadow: 0 4px 25px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        #chat-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--border-color);
+        }
+        #info-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+        .panel-header {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border-color);
+            background-color: #f8f9fa;
+        }
+        .panel-header h2 {
+            margin: 0;
+            font-size: 1.1rem;
+            color: var(--primary-color);
+        }
+        .panel-content {
+            padding: 20px;
+            overflow-y: auto;
+            flex-grow: 1;
+        }
+        #session-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        #user-id-input {
+            flex-grow: 1;
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+        }
+        .btn {
+            padding: 8px 15px;
+            border: none;
+            border-radius: var(--border-radius);
+            cursor: pointer;
+            font-weight: 600;
+            transition: background-color 0.2s;
+        }
+        .btn-primary { background-color: var(--primary-color); color: white; }
+        .btn-primary:hover { background-color: #357abd; }
+        .btn-secondary { background-color: #6c757d; color: white; }
+        .btn-secondary:hover { background-color: #5a6268; }
+        #chat-box {
+            flex-grow: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .chat-message { max-width: 85%; }
+        .message-bubble { padding: 10px 15px; border-radius: 18px; line-height: 1.5; word-wrap: break-word; }
+        .user { align-self: flex-end; }
+        .user .message-bubble { background-color: var(--user-bg); color: white; border-bottom-right-radius: 4px; }
+        .bot { align-self: flex-start; }
+        .bot .message-bubble { background-color: var(--bot-bg); color: var(--text-color); border-bottom-left-radius: 4px; }
+        .error .message-bubble { background-color: #ffebee; color: #c62828; }
+        #typing-indicator { padding: 5px 20px; font-style: italic; color: #888; display: none; }
+        #chat-form { display: flex; padding: 15px; border-top: 1px solid var(--border-color); }
+        #user-input { flex-grow: 1; border: 1px solid #ccc; padding: 10px 15px; border-radius: 20px; margin-right: 10px; }
+        #chat-form button { background-color: var(--primary-color); color: white; border: none; border-radius: 50%; width: 44px; height: 44px; font-size: 1.5rem; cursor: pointer; }
+        
+        /* Info Panel Styling */
+        .info-section { margin-bottom: 25px; }
+        .info-section h3 { margin-top: 0; border-bottom: 2px solid var(--primary-color); padding-bottom: 5px; }
+        .info-card { background: var(--secondary-color); padding: 15px; border-radius: var(--border-radius); margin-bottom: 10px; }
+        .info-card p { margin: 0 0 5px 0; }
+        .info-card p strong { color: var(--primary-color); }
+        .score-badge { background: var(--primary-color); color: white; padding: 3px 8px; border-radius: 12px; font-size: 0.9em; font-weight: bold; }
+        pre { white-space: pre-wrap; background: #2d2d2d; color: #f0f0f0; padding: 15px; border-radius: var(--border-radius); font-family: 'Courier New', Courier, monospace; }
+
+        .loader {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            border: 5px solid #f3f3f3; border-top: 5px solid var(--primary-color);
+            border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite;
+            display: none; z-index: 10;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* Responsive */
+        @media (max-width: 900px) {
+            body { padding: 0; }
+            .main-container { flex-direction: column; height: 100vh; border-radius: 0; }
+            #chat-panel { border-right: none; border-bottom: 1px solid var(--border-color); }
+        }
+    </style>
 </head>
 <body>
-  <header class="app-header">
-    <div class="branding">
-      <div class="logo">🔮</div>
-      <div class="title">
-        <h1 id="app-title">Pokémon Assistant</h1>
-        <p id="app-subtitle">Tanyakan apa saja tentang Pokémon</p>
-      </div>
+
+    <div class="main-container">
+        <div id="chat-panel">
+            <div id="session-controls">
+                <input type="text" id="user-id-input" placeholder="Masukkan User ID (e.g., budi atau 107)">
+                <button id="start-session-btn" class="btn btn-primary">Mulai Sesi</button>
+            </div>
+            <div class="panel-header">
+                <h2 id="chat-header">Chat Assistant</h2>
+            </div>
+            <div id="chat-box">
+                <div class="chat-message bot"><div class="message-bubble">Silakan masukkan User ID dan klik 'Mulai Sesi' untuk memulai.</div></div>
+            </div>
+            <div id="typing-indicator">LISA is typing...</div>
+            <form id="chat-form">
+                <input type="text" id="user-input" placeholder="Ketik pesan..." autocomplete="off" disabled>
+                <button type="submit" title="Kirim" disabled>➔</button>
+            </form>
+        </div>
+
+        <div id="info-panel">
+            <div class="panel-header">
+                <h2>Panel Informasi</h2>
+            </div>
+            <div class="panel-content" id="info-content">
+                <div id="info-actions" style="margin-bottom: 20px; display:none;">
+                    <button id="info-btn" class="btn btn-primary">Tampilkan Info Rekrutmen</button>
+                    <button id="reset-btn" class="btn btn-secondary">Reset Chat</button>
+                </div>
+                <div id="info-results">
+                    <p><i>Data rekrutmen akan ditampilkan di sini setelah Anda mengklik tombol "Tampilkan Info Rekrutmen".</i></p>
+                </div>
+            </div>
+        </div>
     </div>
-    <div class="actions">
-      <button id="resetBtn" class="btn ghost" title="Mulai sesi baru">Reset</button>
-      <a class="btn link" href="https://pokeapi.co/" target="_blank" rel="noopener">PokeAPI</a>
-    </div>
-  </header>
+    <div class="loader" id="loader"></div>
 
-  <main class="chat-shell">
-    <div id="chat" class="chat-window" aria-live="polite" aria-label="Ruang percakapan">
-      <!-- Pesan akan ditambahkan via JS -->
-    </div>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- Variabel Global & Referensi DOM ---
+            let userId = '';
+            let sessionId = '';
 
-    <form id="composer" class="composer" autocomplete="off">
-      <textarea id="input" rows="1" placeholder="Ketik pertanyaan Anda... (Shift+Enter untuk baris baru)"></textarea>
-      <button id="sendBtn" class="btn primary" type="submit" aria-label="Kirim">Kirim</button>
-    </form>
-  </main>
+            const userIdInput = document.getElementById('user-id-input');
+            const startSessionBtn = document.getElementById('start-session-btn');
+            const chatHeader = document.getElementById('chat-header');
+            const chatBox = document.getElementById('chat-box');
+            const chatForm = document.getElementById('chat-form');
+            const userInput = document.getElementById('user-input');
+            const sendButton = chatForm.querySelector('button');
+            const typingIndicator = document.getElementById('typing-indicator');
+            const infoActions = document.getElementById('info-actions');
+            const infoBtn = document.getElementById('info-btn');
+            const resetBtn = document.getElementById('reset-btn');
+            const infoResults = document.getElementById('info-results');
+            const loader = document.getElementById('loader');
 
-  <footer class="app-footer">
-    <small>
-      Berjalan lokal. API key disimpan di server (Flask). Jangan taruh API key di browser.
-    </small>
-  </footer>
+            // --- Fungsi Utama ---
 
-  <script src="{{ url_for('static', filename='script.js') }}"></script>
+            const setupSession = async () => {
+                const inputId = userIdInput.value.trim();
+                if (!inputId) {
+                    alert('User ID tidak boleh kosong.');
+                    return;
+                }
+                userId = inputId;
+                sessionId = localStorage.getItem(`lisa_session_${userId}`) || `session_${Date.now()}`;
+                localStorage.setItem(`lisa_session_${userId}`, sessionId);
+
+                userInput.disabled = false;
+                sendButton.disabled = false;
+                infoActions.style.display = 'flex';
+                
+                await loadHistory();
+            };
+
+            const loadHistory = async () => {
+                showLoader();
+                try {
+                    const response = await fetchAPI(`/api/history?user_id=${userId}&session_id=${sessionId}`);
+                    chatHeader.textContent = `Chat dengan ${response.identity.name} (${response.identity.type})`;
+                    
+                    chatBox.innerHTML = ''; // Kosongkan chat
+                    response.messages.slice(1).forEach(msg => { // Skip system prompt
+                        if (msg.role !== 'system') {
+                            appendMessage(msg.content, msg.role === 'assistant' ? 'bot' : 'user');
+                        }
+                    });
+                } catch (error) {
+                    chatBox.innerHTML = '';
+                    appendMessage(`Gagal memulai sesi: ${error.message}`, 'bot error');
+                    userInput.disabled = true;
+                    sendButton.disabled = true;
+                } finally {
+                    hideLoader();
+                }
+            };
+            
+            const sendMessage = async (message) => {
+                if (!userId) return;
+                appendMessage(message, 'user');
+                userInput.value = '';
+                typingIndicator.style.display = 'block';
+
+                try {
+                    const response = await fetchAPI('/api/chat', {
+                        method: 'POST',
+                        body: JSON.stringify({ user_id: userId, session_id: sessionId, message: message }),
+                    });
+                    appendMessage(response.answer, 'bot');
+                } catch (error) {
+                    appendMessage(`Error: ${error.message}`, 'bot error');
+                } finally {
+                    typingIndicator.style.display = 'none';
+                }
+            };
+
+            const getInfo = async () => {
+                if (!userId) return;
+                showLoader();
+                infoResults.innerHTML = '';
+                try {
+                    // Untuk company, mungkin perlu talent_id. Untuk demo ini, kita biarkan kosong.
+                    const response = await fetchAPI(`/api/info?user_id=${userId}&top=3`);
+                    displayInfoResults(response);
+                } catch (error) {
+                    infoResults.innerHTML = `<div class="info-card error"><p>Gagal mengambil info: ${error.message}</p></div>`;
+                } finally {
+                    hideLoader();
+                }
+            };
+
+            const resetChat = async () => {
+                if (!userId) return;
+                showLoader();
+                try {
+                    await fetchAPI('/api/reset', {
+                        method: 'POST',
+                        body: JSON.stringify({ user_id: userId, session_id: sessionId }),
+                    });
+                    await loadHistory(); // Muat ulang histori setelah reset
+                } catch (error) {
+                    appendMessage(`Gagal mereset chat: ${error.message}`, 'bot error');
+                } finally {
+                    hideLoader();
+                }
+            };
+
+            // --- Fungsi Bantuan UI ---
+
+            const appendMessage = (text, sender, isHtml = false) => {
+                const msgContainer = document.createElement('div');
+                msgContainer.className = `chat-message ${sender}`;
+                const msgBubble = document.createElement('div');
+                msgBubble.className = 'message-bubble';
+                if (isHtml) {
+                    msgBubble.innerHTML = text;
+                } else {
+                    msgBubble.textContent = text;
+                }
+                msgContainer.appendChild(msgBubble);
+                chatBox.appendChild(msgContainer);
+                chatBox.scrollTop = chatBox.scrollHeight;
+            };
+
+            const displayInfoResults = (data) => {
+                let html = '';
+
+                // 1. Profil Talent
+                if (data.talent) {
+                    html += `
+                        <div class="info-section">
+                            <h3>Profil Talent</h3>
+                            <div class="info-card">
+                                <p><strong>Nama:</strong> ${data.talent.name}</p>
+                                <p><strong>Keahlian:</strong> ${data.talent.skills.join(', ') || 'N/A'}</p>
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                // 2. Pesan Outreach
+                if (data.messages && data.messages.length > 0) {
+                     html += `
+                        <div class="info-section">
+                            <h3>Template Pesan Outreach</h3>
+                            <pre>${data.messages[0]}</pre>
+                        </div>
+                    `;
+                }
+
+                // 3. Rekomendasi Teratas
+                if (data.model_result && data.model_result.length > 0) {
+                    html += `<div class="info-section"><h3>⭐ Top Rekomendasi (dari AI)</h3>`;
+                    data.model_result.forEach(job => {
+                        html += `
+                            <div class="info-card">
+                                <p><strong>Posisi:</strong> ${job.title || 'N/A'}</p>
+                                <p><strong>Perusahaan:</strong> ${job.company_name || 'N/A'}</p>
+                                <p><strong>Skor:</strong> <span class="score-badge">${job.score.toFixed(1)}</span></p>
+                                <p><strong>Alasan:</strong> <i>${job.reason || 'Tidak ada alasan.'}</i></p>
+                            </div>
+                        `;
+                    });
+                    html += `</div>`;
+                }
+
+                // 4. Lowongan Terbaru
+                if (data.latest_openings && data.latest_openings.length > 0) {
+                    html += `<div class="info-section"><h3>Daftar Lowongan Terbaru</h3>`;
+                    data.latest_openings.slice(0, 10).forEach(job => {
+                        html += `
+                            <div class="info-card">
+                                <p><strong>${job.title || 'N/A'}</strong> di ${job.company_name || 'N/A'}</p>
+                                <p><small>Lokasi: ${job.location || 'N/A'} | ID: ${job.id}</small></p>
+                            </div>
+                        `;
+                    });
+                    html += `</div>`;
+                }
+                infoResults.innerHTML = html;
+            };
+            
+            const showLoader = () => loader.style.display = 'block';
+            const hideLoader = () => loader.style.display = 'none';
+
+            // --- Fungsi Bantuan API ---
+            const fetchAPI = async (endpoint, options = {}) => {
+                options.headers = { ...options.headers, 'Content-Type': 'application/json' };
+                const response = await fetch(endpoint, options);
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `HTTP Error ${response.status}`);
+                }
+                return response.json();
+            };
+
+            // --- Event Listeners ---
+            startSessionBtn.addEventListener('click', setupSession);
+            chatForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const message = userInput.value.trim();
+                if (message) sendMessage(message);
+            });
+            infoBtn.addEventListener('click', getInfo);
+            resetBtn.addEventListener('click', resetChat);
+        });
+    </script>
+
 </body>
 </html>
+
