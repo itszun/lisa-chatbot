@@ -14,3 +14,27 @@ services:
     command: gunicorn --workers 4 --bind 0.0.0.0:5000 wsgi:app
     volumes:
       - ./app:/usr/src/app
+    environment:
+      - DB_HOST=mongo
+      - DB_PORT=27017
+      - DB_USER=root
+      - DB_PASS=s3cure
+      - MONGO_URI=mongodb://root:s3cure@mongo:27017/
+
+  mongo:
+      image: mongo
+      restart: always
+      environment:
+        MONGO_INITDB_ROOT_USERNAME: root
+        MONGO_INITDB_ROOT_PASSWORD: s3cure
+
+  mongo-express:
+    image: mongo-express
+    restart: always
+    ports:
+      - 8081:8081
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://root:s3cure@mongo:27017/
+      ME_CONFIG_BASICAUTH_ENABLED: true
+      ME_CONFIG_BASICAUTH_USERNAME: mongoexpressuser
+      ME_CONFIG_BASICAUTH_PASSWORD: s3cureexpress
