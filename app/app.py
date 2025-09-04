@@ -72,10 +72,158 @@ DEFAULT_SYSTEM_PROMPT = (
     "Saat menjelaskan sesuatu, JANGAN GUNAKAN FORMAT MARKDOWN seperti bintang (`**`) untuk bold atau tanda hubung (`-`) untuk daftar. "
     "Gunakan kalimat lengkap dalam bentuk paragraf atau daftar bernomor (1., 2., 3.) jika diperlukan untuk membuat penjelasan yang rapi dan mudah dibaca."
 )
+RECRUITER_NAME = os.getenv("RECRUITER_NAME", "Lisa")
+RECRUITER_INSTITUTION = os.getenv("RECRUITER_INSTITUTION", "klien kami")  # fallback jika company kosong
+
 
 # =========================
 # Utils Umum
 # =========================
+
+def _format_outreach_message(job_title: str, company_name: str = None) -> str:
+    job_title = (job_title or "(nama job opening)").strip()
+    instansi = (company_name or RECRUITER_INSTITUTION or "klien kami").strip()
+    return (
+        "Halo\n\n"
+        f"Saya -{RECRUITER_NAME}-, seorang Spesialis Rekrutmen Talenta dari {instansi} Saya sedang mencari {job_title} untuk bergabung dengan klien kami. Sepertinya Anda cocok untuk posisi ini. Saya ingin mengundang Anda untuk wawancara via WA (panggilan telepon). Bisakah saya menelepon Anda pada hari Senin? (Hanya panggilan singkat sekitar 10 menit)\n\n"
+        "Silakan konfirmasikan ketersediaan Anda\n\n"
+        "Salam,"
+    )
+    
+def _coerce_rank_json(text: str) -> List[dict]:
+    """
+    Upaya berlapis mengubah teks model menjadi list[dict] valid.
+    Mendukung 2 format:
+      A) {"items": [ ... ]}
+      B) [ ... ]
+    """
+    if not isinstance(text, str):
+        return []
+
+    # 1) Coba parse langsung
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, list):
+            return obj
+        if isinstance(obj, dict):
+            if isinstance(obj.get("items"), list):
+                return obj["items"]
+            # Ada yang mengembalikan {"result":[...]} dsb.
+            for k in ("results", "data"):
+                if isinstance(obj.get(k), list):
+                    return obj[k]
+            # Kalau dict tapi bukan list — anggap gagal
+    except Exception:
+        pass
+
+    # 2) Coba ekstrak potongan JSON array terluar dengan regex
+    try:
+        m = re.search(r"\[[\s\S]*\]", text)
+        if m:
+            return json.loads(m.group(0))
+    except Exception:
+        pass
+
+    # 3) Coba ekstrak object dengan kunci items
+    try:
+        m = re.search(r"\{\s*\"items\"\s*:\s*\[[\s\S]*?\]\s*\}", text)
+        if m:
+            obj = json.loads(m.group(0))
+            if isinstance(obj.get("items"), list):
+                return obj["items"]
+    except Exception:
+        pass
+
+    return []
+
+def _sanitize_ranking_item(x: dict) -> dict:
+    """
+    Batasi dan normalisasi field agar selalu JSON-serializable dan konsisten.
+    """
+    if not isinstance(x, dict):
+        x = {}
+    out = {
+        "id": x.get("id"),
+        "title": x.get("title"),
+        "company_id": x.get("company_id"),
+        "company_name": x.get("company_name") or "",
+        "score": float(x.get("score") or 0),
+        "reason": str(x.get("reason") or ""),
+    }
+    # Normalisasi tipe angka int untuk id perusahaan bila memungkinkan
+    try:
+        if out["company_id"] is not None:
+            out["company_id"] = int(out["company_id"])
+    except Exception:
+        out["company_id"] = None
+    return out
+
+def _sanitize_ranking_list(items: List[dict]) -> List[dict]:
+    sane = [_sanitize_ranking_item(it) for it in (items or [])]
+    # Urutkan desc by score agar konsisten
+    sane.sort(key=lambda a: a.get("score", 0), reverse=True)
+    return sane
+
+_COMPANY_NAME_CACHE: Dict[int, str] = {}
+
+def _fetch_company_name(company_id: int) -> str:
+    """
+    Ambil nama perusahaan dari API dan cache di memori proses.
+    Mengembalikan string kosong jika gagal.
+    """
+    if not isinstance(company_id, int):
+        try:
+            company_id = int(str(company_id))
+        except Exception:
+            return ""
+    if company_id in _COMPANY_NAME_CACHE:
+        return _COMPANY_NAME_CACHE[company_id] or ""
+    try:
+        comp = get_company_detail(company_id)
+        name = _display_name_from_obj(comp or {}, "")
+        _COMPANY_NAME_CACHE[company_id] = name
+        return name
+    except Exception:
+        _COMPANY_NAME_CACHE[company_id] = ""
+        return ""
+
+def _enrich_openings_with_company(openings: List[dict]) -> List[dict]:
+    """
+    Pastikan setiap opening memiliki 'company_name'.
+    Sumber prioritas:
+      1) opening['company_name']
+      2) opening['company']['name']
+      3) GET /companies/<company_id>
+    """
+    if not isinstance(openings, list):
+        return []
+    for o in openings:
+        if not isinstance(o, dict):
+            continue
+        # Sudah ada?
+        cname = o.get("company_name")
+        if isinstance(cname, str) and cname.strip():
+            continue
+
+        # Coba dari sub-objek 'company'
+        comp_obj = o.get("company") or {}
+        if isinstance(comp_obj, dict):
+            maybe = _display_name_from_obj(comp_obj, "")
+            if maybe:
+                o["company_name"] = maybe
+                continue
+
+        # Terakhir: fetch by company_id
+        cid = o.get("company_id") or comp_obj.get("id")
+        if cid is not None:
+            nm = _fetch_company_name(int(str(cid)))
+            if nm:
+                o["company_name"] = nm
+            else:
+                # Jadikan string kosong agar downstream tidak menampilkan "(perusahaan)"
+                o["company_name"] = ""
+    return openings
+
 def _extract_bearer_token(req) -> str:
     auth = (req.headers.get("Authorization") or "").strip()
     if auth.lower().startswith("bearer "):
@@ -351,11 +499,27 @@ def _extract_skills_from_talent(t: dict) -> List[str]:
     return []
 
 def _simplify_job(job: dict) -> dict:
+    comp_obj = job.get("company") or {}
+    company_id = job.get("company_id") or comp_obj.get("id")
+    company_name = job.get("company_name") or (comp_obj.get("name") if isinstance(comp_obj, dict) else None)
+
+    # Normalisasi skills jika berupa string JSON
+    skills_val = job.get("skills") or job.get("required_skills") or []
+    if isinstance(skills_val, str):
+        try:
+            parsed = json.loads(skills_val)
+            if isinstance(parsed, list):
+                skills_val = parsed
+        except Exception:
+            # fallback: pisah koma
+            skills_val = [s.strip() for s in skills_val.split(",") if s.strip()]
+
     return {
         "id": job.get("id") or job.get("_id") or job.get("job_id"),
         "title": job.get("title") or job.get("position") or job.get("role"),
-        "company_name": job.get("company_name") or (job.get("company") or {}).get("name"),
-        "skills": job.get("skills") or job.get("required_skills") or [],
+        "company_id": company_id,
+        "company_name": company_name,
+        "skills": skills_val,
         "requirements": job.get("requirements") or job.get("body") or "",
         "location": job.get("location") or job.get("city") or job.get("region"),
         "raw": job
@@ -364,63 +528,60 @@ def _simplify_job(job: dict) -> dict:
 def _llm_rank_jobs(talent: dict, jobs: List[dict]) -> List[dict]:
     talent_name = _display_name_from_obj(talent, "talent")
     talent_skills = _extract_skills_from_talent(talent)
+
     simplified = [_simplify_job(j) for j in jobs][:50]
 
+    # Instruksi sangat tegas + minta objek JSON berisi "items"
     system_msg = (
         "Anda adalah asisten matching rekrutmen. "
-        "Tugas: nilai kecocokan kandidat terhadap daftar lowongan. "
-        "Berikan skor 0-100 dan alasan singkat berbasis skill/requirements. "
-        "Jawab dalam JSON valid (array objek). Bahasa Indonesia singkat."
+        "Sumber data berasal dari API. Nilai kecocokan kandidat terhadap lowongan. "
+        "Gunakan title, company_name, company_id, skills/requirements, dan location. "
+        "Keluarkan HANYA JSON valid. Format: {\"items\": [{id, title, company_id, company_name, score, reason}]} "
+        "Tanpa teks lain di luar JSON."
     )
     payload = {"talent": {"name": talent_name, "skills": talent_skills}, "openings": simplified}
 
     messages = [
         {"role": "system", "content": system_msg},
-        {"role": "user", "content": "Kembalikan JSON array dengan elemen: {id, title, company_name, score, reason}."},
+        {"role": "user", "content": "Buat key 'items' berisi array rekomendasi terurut skor desc."},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}
     ]
 
+    # --- Panggilan ke model, dipaksa JSON-only ---
+    raw_text = ""
     try:
         comp = client.chat.completions.create(
             model="gpt-4o",
             messages=messages,
-            temperature=0.2,
+            temperature=0.0,
+            # Paksa JSON-only (model akan mengeluarkan JSON valid)
+            response_format={"type": "json_object"},
         )
-        text = comp.choices[0].message.content or "[]"
-        try:
-            arr = json.loads(text)
-            if isinstance(arr, list):
-                arr.sort(key=lambda a: (a.get("score") or 0), reverse=True)
-                return arr
-        except Exception:
-            import re as _re
-            m = _re.search(r"\[.*\]", text, flags=_re.S)
-            if m:
-                arr = json.loads(m.group(0))
-                if isinstance(arr, list):
-                    arr.sort(key=lambda a: (a.get("score") or 0), reverse=True)
-                    return arr
+        raw_text = comp.choices[0].message.content or ""
+        arr = _coerce_rank_json(raw_text)
+        if arr:
+            return _sanitize_ranking_list(arr)
     except Exception as e:
-        print("[LLM rank jobs] error:", e)
+        print("[LLM rank jobs] error:", e, "| raw_text:", raw_text[:500])
 
-    # Fallback skor sederhana
+    # Fallback: skor overlap sederhana agar tetap JSON valid
     tset = set([s.lower() for s in talent_skills])
+
     def _score(j):
         js = [s.lower() for s in (j.get("skills") or []) if isinstance(s, str)]
-        inter = len(tset & set(js))
-        return 10 * inter
+        return 10 * len(tset & set(js))
 
     scored = []
     for j in simplified:
         scored.append({
-            "id": j["id"],
-            "title": j["title"],
-            "company_name": j["company_name"],
+            "id": j.get("id"),
+            "title": j.get("title"),
+            "company_id": j.get("company_id"),
+            "company_name": j.get("company_name") or "",
             "score": _score(j),
-            "reason": "Skor berbasis overlap sederhana skill kandidat dengan requirement."
+            "reason": "Skor overlap sederhana skill kandidat dengan requirement.",
         })
-    scored.sort(key=lambda a: a["score"], reverse=True)
-    return scored
+    return _sanitize_ranking_list(scored)
 
 # =========================
 # Routes
@@ -786,12 +947,61 @@ def info():
             openings = []
     except Exception:
         return jsonify({"error": "Gagal mengambil job openings dari API Admin."}), 502
+    openings = _enrich_openings_with_company(openings)
 
     ranking = _llm_rank_jobs(talent_data or {}, openings)
+    try:
+        top_n = int(request.args.get("top", "1"))
+    except Exception:
+        top_n = 1
+        top_n = max(1, min(top_n, 10))
+        selected = (ranking[:top_n] if isinstance(ranking, list) else [])
+
+# Ambil hanya N teratas (default 1)
+    selected = (ranking[:top_n] if isinstance(ranking, list) else [])
+
+# Format 1 baris pesan per item yang dipilih (default 1 baris saja)
+    messages = []
+    if selected:
+        first = selected[0]
+        title = first.get("title") or "(nama job opening)"
+        company = first.get("company_name") or ""   # ← ambil nama company dari hasil ranking
+        outreach = _format_outreach_message(title, company_name=company)
+        messages = [outreach]
+    else:
+        messages = ["Maaf, belum ada lowongan yang cocok saat ini."]
+# Optional: rampingkan 'latest_openings' agar aman ditampilkan
+    def _safe_opening(o: dict) -> dict:
+        if not isinstance(o, dict):
+            return {}
+        comp = o.get("company") or {}
+        return {
+            "id": o.get("id"),
+            "title": o.get("title"),
+            "company_id": o.get("company_id") or comp.get("id"),
+            "company_name": o.get("company_name") or comp.get("name"),
+            "location": o.get("location") or o.get("city") or o.get("region"),
+            "due_date": o.get("due_date"),
+            "status": o.get("status"),
+        }
+
+    safe_openings = [_safe_opening(x) for x in openings[:50]]
+
+    return jsonify({
+        "identity": {"type": identity["type"], "name": identity["name"]},
+        "talent": {
+        "name": _display_name_from_obj(talent_data or {}, "talent"),
+        "skills": _extract_skills_from_talent(talent_data or {})
+        },
+        "messages": messages,            # ← kini berformat sesuai template
+        "model_result": selected,        # tetap kirim data top-N untuk kebutuhan UI lain
+        "latest_openings": safe_openings,
+        "top": top_n
+    })
     messages = []
     for rec in ranking[:10]:
         title = rec.get("title") or "(tanpa judul)"
-        compn = rec.get("company_name") or "(perusahaan)"
+        compn = rec.get("company_name") or "(perusahaan tidak teridentifikasi)"
         score = rec.get("score") if isinstance(rec.get("score"), (int, float)) else "-"
         reason = rec.get("reason") or ""
         messages.append(f"Rekomendasi: {title} di {compn} — skor {score}. Alasan: {reason}")
