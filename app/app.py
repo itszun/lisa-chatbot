@@ -225,6 +225,7 @@ def _enrich_openings_with_company(openings: List[dict]) -> List[dict]:
     return openings
 
 def _extract_bearer_token(req) -> str:
+    return ""
     auth = (req.headers.get("Authorization") or "").strip()
     if auth.lower().startswith("bearer "):
         return auth.split(" ", 1)[1].strip()
