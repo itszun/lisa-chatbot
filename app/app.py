@@ -1,10 +1,8 @@
 # app.py
 # -*- coding: utf-8 -*-
-
 import os
-import re
 import json
-import unicodedata
+from uuid import uuid4
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -13,19 +11,17 @@ from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from openai import OpenAI
 from pymongo import MongoClient
-from pymongo.errors import DuplicateKeyError
 from pymongo.server_api import ServerApi
 
-# ====== API client & Tools (sesuai file Anda) ======
 from api_client import ensure_token
 from tools_registry import tools as TOOLS_SPEC, available_functions as AVAILABLE_FUNCS
 
-# =========================
-# Inisialisasi
-# =========================
-load_dotenv()
+# ======================================================================
+# KONFIGURASI UMUM
+# ======================================================================
+MAX_HISTORY_MESSAGES = 50  # jumlah pesan (di luar system pertama) yang dikirim ke model
 
-MAX_HISTORY_MESSAGES = 50
+load_dotenv()
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -42,196 +38,146 @@ if not MONGO_URI:
 API_LOG_DIR = os.getenv("API_LOG_DIR", "./logs")
 os.makedirs(API_LOG_DIR, exist_ok=True)
 
-# =========================
-# MongoDB
-# =========================
+# Sapaan default utk sesi baru
+DEFAULT_GREETING = os.getenv("DEFAULT_GREETING", "Halo! Ada yang bisa saya bantu?")
+
+# ======================================================================
+# KONEKSI MONGODB (Skema: satu dokumen per NAMA)
+#   Koleksi: users_chats
+#   Dokumen:
+#     {
+#       _id,
+#       name: "Nama Lengkap",
+#       users: ["userid1", "userid2", ...],
+#       sessions: [
+#         { session_id, created_at, messages: [ {role, content, ...}, ... ] },
+#         ...
+#       ]
+#     }
+#   Index unik: name
+# ======================================================================
+mongo_client = None
 try:
-    mongo_client = MongoClient(
-        MONGO_URI,
-        server_api=ServerApi("1"),
-        serverSelectionTimeoutMS=5000
-    )
-    mongo_client.admin.command("ping")
+    mongo_client = MongoClient(MONGO_URI, server_api=ServerApi('1'))
     db = mongo_client.chatbot_db
-    sessions_collection = db.sessions
-    sessions_collection.create_index([("user_id", 1), ("session_id", 1)], unique=True)
-    print("Berhasil terhubung ke MongoDB!")
+    users_chats = db.users_chats
+    users_chats.create_index("name", unique=True)
+    print("Berhasil terhubung ke MongoDB dan memastikan index unik pada 'name'.")
 except Exception as e:
     print(f"Gagal terhubung ke MongoDB: {e}")
     mongo_client = None
 
-# =========================
-# Prompt Sistem
-# =========================
+# ======================================================================
+# SYSTEM PROMPT DEFAULT
+# ======================================================================
 DEFAULT_SYSTEM_PROMPT = (
     "Anda adalah asisten yang membantu untuk sebuah Admin API. "
     "Gunakan tools yang tersedia untuk melakukan operasi CRUD. "
     "Berikan jawaban yang ringkas, hanya tampilkan field-field kunci. "
     "Jika sebuah operasi gagal, berikan pesan error yang singkat dan jelas. "
     "Selalu balas dalam Bahasa Indonesia. "
-    "Saat menjelaskan sesuatu, JANGAN GUNAKAN FORMAT MARKDOWN seperti bintang (`**`) untuk bold atau tanda hubung (`-`) untuk daftar. "
+    "Saat menjelaskan sesuatu, JANGAN GUNAKAN FORMAT MARKDOWN seperti bintang (**) untuk bold atau tanda hubung (-) untuk daftar. "
     "Gunakan kalimat lengkap dalam bentuk paragraf atau daftar bernomor (1., 2., 3.) jika diperlukan untuk membuat penjelasan yang rapi dan mudah dibaca."
 )
-RECRUITER_NAME = os.getenv("RECRUITER_NAME", "Lisa")
-RECRUITER_INSTITUTION = os.getenv("RECRUITER_INSTITUTION", "klien kami")  # fallback jika company kosong
 
+# ======================================================================
+# UTILITAS
+# ======================================================================
+def parse_user(user_field: str) -> Tuple[str, str]:
+    """
+    Mem-parse 'user' dengan format 'userid@nama' → (userid, nama).
+    Contoh: 'u123@Budi Santoso' → ('u123', 'Budi Santoso')
+    """
+    if not user_field or "@" not in user_field:
+        raise ValueError("Format user harus 'userid@nama'.")
+    userid, name = user_field.split("@", 1)
+    userid = userid.strip()
+    name = name.strip()
+    if not userid or not name:
+        raise ValueError("userid atau nama tidak boleh kosong.")
+    return userid, name
 
-# =========================
-# Utils Umum
-# =========================
+def get_or_create_name_doc(name: str, userid: Optional[str] = None) -> dict:
+    """
+    Ambil dokumen berdasarkan 'name'. Jika belum ada dan userid diberikan, buat dokumen baru.
+    Skema: { name, users:[], sessions:[] }
+    """
+    doc = users_chats.find_one({"name": name})
+    if doc:
+        if userid and userid not in (doc.get("users") or []):
+            users_chats.update_one({"_id": doc["_id"]}, {"$addToSet": {"users": userid}})
+            doc = users_chats.find_one({"_id": doc["_id"]})
+        return doc
 
-def _format_outreach_message(job_title: str, company_name: str = None) -> str:
-    job_title = (job_title or "(nama job opening)").strip()
-    instansi = (company_name or RECRUITER_INSTITUTION or "klien kami").strip()
-    return (
-        "Halo\n\n"
-        f"Saya -{RECRUITER_NAME}-, seorang Spesialis Rekrutmen Talenta dari {instansi} Saya sedang mencari {job_title} untuk bergabung dengan klien kami. Sepertinya Anda cocok untuk posisi ini. Saya ingin mengundang Anda untuk wawancara via WA (panggilan telepon). Bisakah saya menelepon Anda pada hari Senin? (Hanya panggilan singkat sekitar 10 menit)\n\n"
-        "Silakan konfirmasikan ketersediaan Anda\n\n"
-        "Salam,"
+    new_doc = {"name": name, "users": [userid] if userid else [], "sessions": []}
+    users_chats.insert_one(new_doc)
+    return users_chats.find_one({"name": name})
+
+def find_session(doc: dict, session_id: str) -> Optional[dict]:
+    for s in (doc.get("sessions") or []):
+        if s.get("session_id") == session_id:
+            return s
+    return None
+
+def upsert_session_messages(name: str, session_id: str, messages: List[dict]) -> None:
+    users_chats.update_one(
+        {"name": name, "sessions.session_id": session_id},
+        {"$set": {"sessions.$.messages": messages}}
     )
-    
-def _coerce_rank_json(text: str) -> List[dict]:
-    """
-    Upaya berlapis mengubah teks model menjadi list[dict] valid.
-    Mendukung 2 format:
-      A) {"items": [ ... ]}
-      B) [ ... ]
-    """
-    if not isinstance(text, str):
-        return []
 
-    # 1) Coba parse langsung
+def append_session(name: str, session_id: str, created_at: datetime, messages: List[dict]) -> None:
+    users_chats.update_one(
+        {"name": name},
+        {"$push": {"sessions": {"session_id": session_id, "created_at": created_at, "messages": messages}}}
+    )
+
+def create_session_with_initial_message(name: str, system_prompt: str, initial_message: str) -> Tuple[str, datetime]:
+    """
+    Membuat session baru pada dokumen 'name' dengan pesan awal dari assistant.
+    Mengembalikan (session_id, created_at).
+    """
+    sid = str(uuid4())
+    created_at = datetime.utcnow()
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "assistant", "content": initial_message},
+    ]
+    append_session(name=name, session_id=sid, created_at=created_at, messages=messages)
+    return sid, created_at
+
+def _log_tool_call(userid: str, name: str, session_id: str, function_name: str, args: dict, result: Any):
+    """Mencatat pemanggilan tool ke file log yang unik per panggilan."""
     try:
-        obj = json.loads(text)
-        if isinstance(obj, list):
-            return obj
-        if isinstance(obj, dict):
-            if isinstance(obj.get("items"), list):
-                return obj["items"]
-            # Ada yang mengembalikan {"result":[...]} dsb.
-            for k in ("results", "data"):
-                if isinstance(obj.get(k), list):
-                    return obj[k]
-            # Kalau dict tapi bukan list — anggap gagal
-    except Exception:
-        pass
+        now = datetime.now()
+        timestamp_safe = now.strftime("%Y-%m-%d_%H-%M-%S")
+        short_sid = session_id[:8]
+        log_filename = f"{timestamp_safe}__{function_name}_{short_sid}.log"
+        log_path = os.path.join(API_LOG_DIR, log_filename)
 
-    # 2) Coba ekstrak potongan JSON array terluar dengan regex
-    try:
-        m = re.search(r"\[[\s\S]*\]", text)
-        if m:
-            return json.loads(m.group(0))
-    except Exception:
-        pass
+        args_str = json.dumps(args, ensure_ascii=False)
+        result_str = json.dumps(result, ensure_ascii=False, indent=2)
+        header_line = f"[{now.strftime('%Y/%m/%d %H:%M:%S')}] [UserID: {userid}, Name: {name}, Session: {session_id}]"
 
-    # 3) Coba ekstrak object dengan kunci items
-    try:
-        m = re.search(r"\{\s*\"items\"\s*:\s*\[[\s\S]*?\]\s*\}", text)
-        if m:
-            obj = json.loads(m.group(0))
-            if isinstance(obj.get("items"), list):
-                return obj["items"]
-    except Exception:
-        pass
-
-    return []
-
-def _sanitize_ranking_item(x: dict) -> dict:
-    """
-    Batasi dan normalisasi field agar selalu JSON-serializable dan konsisten.
-    """
-    if not isinstance(x, dict):
-        x = {}
-    out = {
-        "id": x.get("id"),
-        "title": x.get("title"),
-        "company_id": x.get("company_id"),
-        "company_name": x.get("company_name") or "",
-        "score": float(x.get("score") or 0),
-        "reason": str(x.get("reason") or ""),
-    }
-    # Normalisasi tipe angka int untuk id perusahaan bila memungkinkan
-    try:
-        if out["company_id"] is not None:
-            out["company_id"] = int(out["company_id"])
-    except Exception:
-        out["company_id"] = None
-    return out
-
-def _sanitize_ranking_list(items: List[dict]) -> List[dict]:
-    sane = [_sanitize_ranking_item(it) for it in (items or [])]
-    # Urutkan desc by score agar konsisten
-    sane.sort(key=lambda a: a.get("score", 0), reverse=True)
-    return sane
-
-_COMPANY_NAME_CACHE: Dict[int, str] = {}
-
-def _fetch_company_name(company_id: int) -> str:
-    """
-    Ambil nama perusahaan dari API dan cache di memori proses.
-    Mengembalikan string kosong jika gagal.
-    """
-    if not isinstance(company_id, int):
-        try:
-            company_id = int(str(company_id))
-        except Exception:
-            return ""
-    if company_id in _COMPANY_NAME_CACHE:
-        return _COMPANY_NAME_CACHE[company_id] or ""
-    try:
-        comp = get_company_detail(company_id)
-        name = _display_name_from_obj(comp or {}, "")
-        _COMPANY_NAME_CACHE[company_id] = name
-        return name
-    except Exception:
-        _COMPANY_NAME_CACHE[company_id] = ""
-        return ""
-
-def _enrich_openings_with_company(openings: List[dict]) -> List[dict]:
-    """
-    Pastikan setiap opening memiliki 'company_name'.
-    Sumber prioritas:
-      1) opening['company_name']
-      2) opening['company']['name']
-      3) GET /companies/<company_id>
-    """
-    if not isinstance(openings, list):
-        return []
-    for o in openings:
-        if not isinstance(o, dict):
-            continue
-        # Sudah ada?
-        cname = o.get("company_name")
-        if isinstance(cname, str) and cname.strip():
-            continue
-
-        # Coba dari sub-objek 'company'
-        comp_obj = o.get("company") or {}
-        if isinstance(comp_obj, dict):
-            maybe = _display_name_from_obj(comp_obj, "")
-            if maybe:
-                o["company_name"] = maybe
-                continue
-
-        # Terakhir: fetch by company_id
-        cid = o.get("company_id") or comp_obj.get("id")
-        if cid is not None:
-            nm = _fetch_company_name(int(str(cid)))
-            if nm:
-                o["company_name"] = nm
-            else:
-                # Jadikan string kosong agar downstream tidak menampilkan "(perusahaan)"
-                o["company_name"] = ""
-    return openings
+        log_entry = (
+            f"{header_line}\n"
+            f"Fungsi yang dipanggil: {function_name}({args_str})\n"
+            f"Hasil: {result_str}\n"
+        )
+        with open(log_path, 'w', encoding='utf-8') as f:
+            f.write(log_entry)
+    except Exception as e:
+        print(f"!! Gagal menulis log: {e}")
 
 def _extract_bearer_token(req) -> str:
-    return ""
+    # Prioritas: Authorization header
     auth = (req.headers.get("Authorization") or "").strip()
     if auth.lower().startswith("bearer "):
         return auth.split(" ", 1)[1].strip()
+    # Alternatif: X-Api-Token header
     x = (req.headers.get("X-Api-Token") or "").strip()
     if x:
         return x
+    # Alternatif: body.token
     try:
         data = req.get_json(silent=True) or {}
         if isinstance(data, dict):
@@ -242,589 +188,162 @@ def _extract_bearer_token(req) -> str:
         pass
     return ""
 
-def _log_tool_call(user_id: str, session_id: str, function_name: str, args: dict, result: Any):
-    try:
-        now = datetime.now()
-        ts = now.strftime("%Y-%m-%d_%H-%M-%S")
-        short_sid = (session_id or "")[:8]
-        log_filename = f"{ts}__{function_name}_{short_sid}.log"
-        log_path = os.path.join(API_LOG_DIR, log_filename)
-        args_str = json.dumps(args, ensure_ascii=False)
-        result_str = json.dumps(result, ensure_ascii=False, indent=2)
-        header_line = f"[{now.strftime('%Y/%m/%d %H:%M:%S')}] [User: {user_id}, Session: {session_id}]"
-        with open(log_path, "w", encoding="utf-8") as f:
-            f.write(f"{header_line}\nFungsi yang dipanggil: {function_name}({args_str})\nHasil: {result_str}\n")
-    except Exception as e:
-        print(f"!! Gagal menulis log: {e}")
-
-def _trim_for_model(messages: list) -> list:
-    if not messages:
-        return messages
-    if len(messages) > MAX_HISTORY_MESSAGES:
-        return [messages[0]] + messages[-MAX_HISTORY_MESSAGES:]
-    return messages
-
-def _slug(s: str) -> str:
-    if not isinstance(s, str):
-        s = str(s or "")
-    s = unicodedata.normalize("NFKD", s)
-    s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    s = s.lower()
-    import re as _re
-    return _re.sub(r"[^a-z0-9]", "", s)
-
-# =========================
-# Identitas via API Admin
-# =========================
-# Menggunakan fungsi-fungsi dari api_client (yang sudah Anda siapkan di REMOTE_BASE_URL/PANEL)
-from api_client import (
-    list_talent, get_talent_detail,
-    list_companies, get_company_detail,
-    list_job_openings,  # untuk rekomendasi
-)
-
-def _display_name_from_obj(obj: dict, default_val: str = "") -> str:
-    if not isinstance(obj, dict):
-        return default_val
-    for k in ("name", "full_name", "fullname", "display_name", "company_name", "title"):
-        v = obj.get(k)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    # Nama gabungan (kalau ada)
-    first = obj.get("first_name") or obj.get("firstname")
-    last  = obj.get("last_name")  or obj.get("lastname")
-    combo = " ".join([str(first or "").strip(), str(last or "").strip()]).strip()
-    return combo or default_val
-
-def _parse_int(s: str) -> Optional[int]:
-    try:
-        return int(str(s).strip())
-    except Exception:
-        return None
-
-def _name_match_score(candidate_name: str, query: str) -> float:
-    """
-    Skor 0..100 berdasarkan kesamaan nama:
-      1) equal (case-insensitive) → 100
-      2) slug equal (hilangkan non-alnum) → 95
-      3) substring (salah satu mengandung yang lain) → 80
-      4) token overlap (Jaccard) → 60 * overlap
-      5) else → 0
-    """
-    if not isinstance(candidate_name, str):
-        candidate_name = str(candidate_name or "")
-    if not isinstance(query, str):
-        query = str(query or "")
-
-    a = candidate_name.strip().lower()
-    b = query.strip().lower()
-    if not a or not b:
-        return 0.0
-
-    if a == b:
-        return 100.0
-
-    sa = _slug(a)
-    sb = _slug(b)
-    if sa and sa == sb:
-        return 95.0
-
-    if a in b or b in a:
-        return 80.0
-
-    # token overlap sederhana
-    ta = set([t for t in re.findall(r"[a-z0-9]+", a)])
-    tb = set([t for t in re.findall(r"[a-z0-9]+", b)])
-    if ta and tb:
-        inter = len(ta & tb)
-        union = len(ta | tb)
-        jacc = inter / union if union else 0.0
-        if jacc > 0:
-            return 60.0 * jacc
-
-    return 0.0
-
-def _best_match_by_name(objects: List[dict], query: str) -> Optional[dict]:
-    """
-    Pilih objek dengan nama terbaik terhadap query.
-    Nama diambil via _display_name_from_obj().
-    """
-    best = None
-    best_score = -1.0
-    for obj in objects or []:
-        nm = _display_name_from_obj(obj, "")
-        score = _name_match_score(nm, query)
-        if score > best_score:
-            best_score = score
-            best = obj
-    return best
-
-
-def _resolve_identity_via_api_admin(user_id: str) -> Dict[str, Any]:
-    """
-    Cek user_id pada API Talent/Company (Admin API) dengan pemilihan hasil paling relevan.
-    Aturan:
-      - Jika user_id integer → cek detail talent, lalu company.
-      - Jika string → cari DI KEDUANYA (companies & talents), skor nama, pilih skor tertinggi.
-        Tie-break: prefer company.
-    """
-    uid = (user_id or "").strip()
-    if not uid:
-        return {"ok": False, "type": None, "name": "", "raw": None}
-
-    # 1) Numeric id → detail langsung
-    as_int = _parse_int(uid)
-    if as_int is not None:
-        try:
-            t = get_talent_detail(as_int)
-            if isinstance(t, dict) and t:
-                return {"ok": True, "type": "talent", "name": _display_name_from_obj(t, uid), "raw": t}
-        except Exception:
-            pass
-        try:
-            c = get_company_detail(as_int)
-            if isinstance(c, dict) and c:
-                return {"ok": True, "type": "company", "name": _display_name_from_obj(c, uid), "raw": c}
-        except Exception:
-            pass
-        return {"ok": False, "type": None, "name": "", "raw": None}
-
-    # 2) String id → cari di companies & talents, lalu pilih yang paling relevan
-    companies = []
-    talents = []
-    try:
-        companies = list_companies(page=1, per_page=5, search=uid) or []
-        if isinstance(companies, dict) and "data" in companies and isinstance(companies["data"], list):
-            companies = companies["data"]
-    except Exception:
-        companies = []
-
-    try:
-        talents = list_talent(page=1, per_page=5, search=uid) or []
-        if isinstance(talents, dict) and "data" in talents and isinstance(talents["data"], list):
-            talents = talents["data"]
-    except Exception:
-        talents = []
-
-    best_company = _best_match_by_name(companies, uid) if companies else None
-    best_talent  = _best_match_by_name(talents, uid) if talents else None
-
-    # Hitung skor keduanya
-    sc_company = _name_match_score(_display_name_from_obj(best_company or {}, ""), uid) if best_company else -1
-    sc_talent  = _name_match_score(_display_name_from_obj(best_talent  or {}, ""), uid) if best_talent  else -1
-
-    # Heuristik: jika nama terlihat seperti perusahaan, beri sedikit bobot ke company
-    looks_like_company = any(x in uid.lower() for x in ["-", " inc", " llc", " ltd", " pt ", " tbk", " corp", " co ", " gmbh", " s.r.l", " s.a"])
-    if looks_like_company and sc_company >= 0:
-        sc_company += 3.0  # dorong sedikit
-
-    # Pilih tertinggi; jika seri → prefer company
-    if sc_company > sc_talent and best_company:
-        return {"ok": True, "type": "company", "name": _display_name_from_obj(best_company, uid), "raw": best_company}
-    if sc_talent > sc_company and best_talent:
-        return {"ok": True, "type": "talent", "name": _display_name_from_obj(best_talent, uid), "raw": best_talent}
-    if sc_company == sc_talent:
-        if best_company:
-            return {"ok": True, "type": "company", "name": _display_name_from_obj(best_company, uid), "raw": best_company}
-        if best_talent:
-            return {"ok": True, "type": "talent", "name": _display_name_from_obj(best_talent, uid), "raw": best_talent}
-
-    # Tidak ketemu apa pun
-    print(f"[IDENTITY/API-ADMIN] Tidak ditemukan untuk user_id='{uid}'.")
-    return {"ok": False, "type": None, "name": "", "raw": None}
-
-def _require_identity(user_id: str) -> dict:
-    """
-    Pastikan token valid (ensure_token) dulu, baru validasi user_id via API Admin.
-    """
-    identity = _resolve_identity_via_api_admin(user_id)
-    if not identity["ok"]:
-        raise ValueError("user_id tidak dikenali pada API Talent/Company.")
-    return identity
-
-def _greeting_prefix(name: str) -> str:
-    name = (name or "").strip()
-    return f"Hii {name}" if name else "Hii"
-
-# =========================
-# Session & History (Mongo)
-# =========================
-def _get_or_create_session(user_id: str, sid: str, system_prompt: str, identity: dict) -> dict:
-    if not mongo_client:
-        raise RuntimeError("Koneksi MongoDB tidak tersedia.")
-    doc = sessions_collection.find_one({"user_id": user_id, "session_id": sid})
-    if doc:
-        return doc
-    new_doc = {
-        "user_id": user_id,
-        "session_id": sid,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
-        "messages": [{"role": "system", "content": system_prompt}],
-        "resets_count": 0,
-        "checkpoints": [],
-        "identity": {"type": identity.get("type"), "name": identity.get("name")},
-        "greeted": False
-    }
-    try:
-        sessions_collection.insert_one(new_doc)
-        return new_doc
-    except DuplicateKeyError:
-        return sessions_collection.find_one({"user_id": user_id, "session_id": sid})
-
-# =========================
-# LLM: Rekomendasi Jobs
-# =========================
-def _extract_skills_from_talent(t: dict) -> List[str]:
-    if not isinstance(t, dict):
-        return []
-    skills = t.get("skills")
-    # Di API Anda, skills mungkin string JSON yang disimpan.
-    if isinstance(skills, str):
-        try:
-            arr = json.loads(skills)
-            if isinstance(arr, list):
-                return [str(x) for x in arr if isinstance(x, (str, int, float))]
-        except Exception:
-            # fallback split koma
-            return [s.strip() for s in skills.split(",") if s.strip()]
-    if isinstance(skills, list):
-        return [str(x) for x in skills if isinstance(x, (str, int, float))]
-    # Fallback: cari fields lain
-    for alt in ("skill_list", "keahlian", "competencies"):
-        v = t.get(alt)
-        if isinstance(v, list):
-            return [str(x) for x in v if isinstance(x, (str, int, float))]
-        if isinstance(v, str) and v.strip():
-            return [s.strip() for s in v.split(",") if s.strip()]
-    return []
-
-def _simplify_job(job: dict) -> dict:
-    comp_obj = job.get("company") or {}
-    company_id = job.get("company_id") or comp_obj.get("id")
-    company_name = job.get("company_name") or (comp_obj.get("name") if isinstance(comp_obj, dict) else None)
-
-    # Normalisasi skills jika berupa string JSON
-    skills_val = job.get("skills") or job.get("required_skills") or []
-    if isinstance(skills_val, str):
-        try:
-            parsed = json.loads(skills_val)
-            if isinstance(parsed, list):
-                skills_val = parsed
-        except Exception:
-            # fallback: pisah koma
-            skills_val = [s.strip() for s in skills_val.split(",") if s.strip()]
-
-    return {
-        "id": job.get("id") or job.get("_id") or job.get("job_id"),
-        "title": job.get("title") or job.get("position") or job.get("role"),
-        "company_id": company_id,
-        "company_name": company_name,
-        "skills": skills_val,
-        "requirements": job.get("requirements") or job.get("body") or "",
-        "location": job.get("location") or job.get("city") or job.get("region"),
-        "raw": job
-    }
-
-def _llm_rank_jobs(talent: dict, jobs: List[dict]) -> List[dict]:
-    talent_name = _display_name_from_obj(talent, "talent")
-    talent_skills = _extract_skills_from_talent(talent)
-
-    simplified = [_simplify_job(j) for j in jobs][:50]
-
-    # Instruksi sangat tegas + minta objek JSON berisi "items"
-    system_msg = (
-        "Anda adalah asisten matching rekrutmen. "
-        "Sumber data berasal dari API. Nilai kecocokan kandidat terhadap lowongan. "
-        "Gunakan title, company_name, company_id, skills/requirements, dan location. "
-        "Keluarkan HANYA JSON valid. Format: {\"items\": [{id, title, company_id, company_name, score, reason}]} "
-        "Tanpa teks lain di luar JSON."
-    )
-    payload = {"talent": {"name": talent_name, "skills": talent_skills}, "openings": simplified}
-
-    messages = [
-        {"role": "system", "content": system_msg},
-        {"role": "user", "content": "Buat key 'items' berisi array rekomendasi terurut skor desc."},
-        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}
-    ]
-
-    # --- Panggilan ke model, dipaksa JSON-only ---
-    raw_text = ""
-    try:
-        comp = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            temperature=0.0,
-            # Paksa JSON-only (model akan mengeluarkan JSON valid)
-            response_format={"type": "json_object"},
-        )
-        raw_text = comp.choices[0].message.content or ""
-        arr = _coerce_rank_json(raw_text)
-        if arr:
-            return _sanitize_ranking_list(arr)
-    except Exception as e:
-        print("[LLM rank jobs] error:", e, "| raw_text:", raw_text[:500])
-
-    # Fallback: skor overlap sederhana agar tetap JSON valid
-    tset = set([s.lower() for s in talent_skills])
-
-    def _score(j):
-        js = [s.lower() for s in (j.get("skills") or []) if isinstance(s, str)]
-        return 10 * len(tset & set(js))
-
-    scored = []
-    for j in simplified:
-        scored.append({
-            "id": j.get("id"),
-            "title": j.get("title"),
-            "company_id": j.get("company_id"),
-            "company_name": j.get("company_name") or "",
-            "score": _score(j),
-            "reason": "Skor overlap sederhana skill kandidat dengan requirement.",
-        })
-    return _sanitize_ranking_list(scored)
-
-# =========================
-# Routes
-# =========================
+# ======================================================================
+# ROUTES
+# ======================================================================
 @app.route("/")
 def index():
-    try:
-        return render_template("index.html")
-    except Exception:
-        return "OK"
+    return render_template("index.html")
 
-@app.route("/api/health", methods=["GET"])
-def health():
-    cols = []
-    try:
-        cols = db.list_collection_names()
-    except Exception:
-        cols = []
-    return jsonify({"ok": True, "mongo": bool(mongo_client), "collections": cols}), 200
-
-@app.route("/api/history", methods=["GET"])
-def get_history():
-    user_id = request.args.get("user_id", "").strip()
-    sid = request.args.get("session_id", "").strip()
-    if not user_id or not sid:
-        return jsonify({"error": "user_id dan session_id harus disediakan."}), 400
+# ---------- SESSION DISCOVERY ----------
+@app.route("/api/sessions", methods=["GET"])
+def list_sessions():
+    """
+    GET /api/sessions?user=userid@nama
+    """
     try:
         incoming_token = _extract_bearer_token(request)
-        # Pastikan token siap untuk panggil API Admin
         ensure_token(preferred_token=incoming_token if incoming_token else None)
-        identity = _require_identity(user_id)
-        doc = _get_or_create_session(user_id, sid, DEFAULT_SYSTEM_PROMPT, identity)
-        return jsonify({
-            "session_id": sid,
-            "user_id": user_id,
-            "identity": {"type": identity["type"], "name": identity["name"]},
-            "messages": doc.get("messages", []),
-            "resets_count": doc.get("resets_count", 0),
-            "checkpoints": doc.get("checkpoints", []),
-            "greeted": doc.get("greeted", False)
+    except Exception as e:
+        return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
+
+    user_field = (request.args.get("user") or "").strip()
+    try:
+        userid, name = parse_user(user_field)
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+
+    if not mongo_client:
+        return jsonify({"error": "MongoDB tidak tersedia"}), 500
+
+    doc = get_or_create_name_doc(name=name, userid=userid)
+    sessions = []
+    for s in doc.get("sessions", []):
+        sessions.append({
+            "session_id": s.get("session_id"),
+            "created_at": s.get("created_at").isoformat() if isinstance(s.get("created_at"), datetime) else s.get("created_at"),
+            "messages_count": len(s.get("messages") or [])
         })
-    except ValueError as ve:
-        return jsonify({"error": str(ve)}), 400
-    except Exception as e:
-        return jsonify({"error": f"Gagal mengambil riwayat: {str(e)}"}), 500
+    sessions.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    return jsonify({"name": name, "sessions": sessions})
 
-@app.route("/api/session/<sid>", methods=["GET"])
-def get_session(sid):
-    user_id = request.args.get("user_id", "").strip()
-    if not user_id:
-        return jsonify({"error": "user_id harus disediakan."}), 400
+@app.route("/api/sessions", methods=["POST"])
+def create_session():
+    """
+    POST /api/sessions
+    Body: { "user": "userid@nama", "system_prompt": "...(opsional)" }
+    Membuat session baru untuk 'nama' dengan pesan sapaan awal dari assistant.
+    """
+    data = request.get_json(force=True)
     try:
         incoming_token = _extract_bearer_token(request)
         ensure_token(preferred_token=incoming_token if incoming_token else None)
-        _ = _require_identity(user_id)
-        doc = sessions_collection.find_one({"user_id": user_id, "session_id": sid})
-        if not doc:
-            return jsonify({"error": "Session tidak ditemukan"}), 404
-        if "_id" in doc:
-            doc["_id"] = str(doc["_id"])
-        return jsonify(doc), 200
-    except ValueError as ve:
-        return jsonify({"error": str(ve)}), 400
     except Exception as e:
-        return jsonify({"error": f"Gagal mengambil session: {str(e)}"}), 500
+        return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
 
-@app.route("/api/reset", methods=["POST"])
-def logical_reset():
-    data = request.get_json(silent=True) or {}
-    user_id = (data.get("user_id") or "").strip()
-    sid = (data.get("session_id") or "").strip()
-    if not user_id or not sid:
-        return jsonify({"error": "user_id dan session_id harus disediakan."}), 400
+    user_field = (data.get("user") or "").strip()
+    system_prompt = data.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
+
     try:
-        incoming_token = _extract_bearer_token(request)
-        ensure_token(preferred_token=incoming_token if incoming_token else None)
-        identity = _require_identity(user_id)
-        doc = _get_or_create_session(user_id, sid, DEFAULT_SYSTEM_PROMPT, identity)
-        checkpoint = {"at": datetime.utcnow().isoformat() + "Z", "note": "logical reset"}
-        update_res = sessions_collection.update_one(
-            {"_id": doc["_id"]},
-            {"$inc": {"resets_count": 1},
-             "$push": {"checkpoints": checkpoint},
-             "$set": {"updated_at": datetime.utcnow(), "greeted": False}}
-        )
-        return jsonify({
-            "ok": True, "session_id": sid, "checkpoint": checkpoint,
-            "db_updated": update_res.acknowledged,
-            "db_match": update_res.matched_count,
-            "db_modified": update_res.modified_count
-        })
+        userid, name = parse_user(user_field)
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
-    except Exception as e:
-        return jsonify({"error": f"Gagal reset: {str(e)}"}), 500
 
-@app.route("/api/hard_reset", methods=["POST"])
-def hard_reset():
-    data = request.get_json(silent=True) or {}
-    user_id = (data.get("user_id") or "").strip()
-    sid = (data.get("session_id") or "").strip()
-    system_prompt = data.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
-    if not user_id or not sid:
-        return jsonify({"error": "user_id dan session_id harus disediakan."}), 400
-    try:
-        incoming_token = _extract_bearer_token(request)
-        ensure_token(preferred_token=incoming_token if incoming_token else None)
-        identity = _require_identity(user_id)
-        doc = _get_or_create_session(user_id, sid, system_prompt, identity)
-        new_messages = [{"role": "system", "content": system_prompt}]
-        update_res = sessions_collection.update_one(
-            {"_id": doc["_id"]},
-            {"$set": {"messages": new_messages,
-                      "updated_at": datetime.utcnow(),
-                      "identity": {"type": identity["type"], "name": identity["name"]},
-                      "greeted": False}}
-        )
-        return jsonify({
-            "ok": True, "session_id": sid,
-            "db_updated": update_res.acknowledged,
-            "db_match": update_res.matched_count,
-            "db_modified": update_res.modified_count
-        })
-    except ValueError as ve:
-        return jsonify({"error": str(ve)}), 400
-    except Exception as e:
-        return jsonify({"error": f"Gagal hard reset: {str(e)}"}), 500
+    if not mongo_client:
+        return jsonify({"error": "MongoDB tidak tersedia"}), 500
 
+    # Pastikan dokumen nama ada
+    _ = get_or_create_name_doc(name=name, userid=userid)
+
+    new_sid = str(uuid4())
+    created_at = datetime.utcnow()
+
+    # Tambahkan sapaan assistant agar sesi baru tidak kosong
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "assistant", "content": DEFAULT_GREETING},
+    ]
+    append_session(name=name, session_id=new_sid, created_at=created_at, messages=messages)
+
+    return jsonify({
+        "name": name,
+        "session_id": new_sid,
+        "created_at": created_at.isoformat()
+    })
+
+# ---------- CHAT ----------
 @app.route("/api/chat", methods=["POST"])
 def chat():
     """
-    Alur:
-    1) Pastikan token Admin API siap (ensure_token).
-    2) Validasi user_id via API Talent/Company.
-    3) Simpan/ambil sesi chat di Mongo.
-    4) message kosong → ringkasan/welcome + greeting sekali per sesi.
-    5) message ada → kirim ke GPT dengan tools (tools_registry), eksekusi tool-calls, simpan hasil.
+    POST /api/chat
+    Body minimal:
+      {
+        "user": "userid@nama",   # WAJIB
+        "session_id": "...",     # WAJIB
+        "message": "..."         # WAJIB
+      }
     """
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        return jsonify({"error": "Permintaan tidak valid. Harap kirimkan JSON."}), 400
+    data = request.get_json(force=True)
 
-    user_id = (data.get("user_id") or "").strip()
-    sid = (data.get("session_id") or "").strip()
-    user_msg = (data.get("message") or "").strip()
-    system_prompt = data.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
-
-    if not user_id or not sid:
-        return jsonify({"error": "user_id dan session_id harus disediakan."}), 400
-
-    # 1) Pastikan token Admin API
+    # Auth
     try:
         incoming_token = _extract_bearer_token(request)
         ensure_token(preferred_token=incoming_token if incoming_token else None)
     except Exception as e:
-        return jsonify({"error": f"Auth Admin API gagal: {str(e)}", "session_id": sid}), 401
+        return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
 
-    # 2) Validasi identitas via API Admin
-    try:
-        identity = _require_identity(user_id)
-    except ValueError as ve:
-        return jsonify({"error": str(ve), "session_id": sid}), 400
+    # Validasi
+    user_field = (data.get("user") or "").strip()
+    session_id = (data.get("session_id") or "").strip()
+    user_msg = (data.get("message") or "").strip()
 
-    # 3) Ambil/buat sesi
-    try:
-        session_doc = _get_or_create_session(user_id, sid, system_prompt, identity)
-        if session_doc.get("identity", {}) != {"type": identity["type"], "name": identity["name"]}:
-            sessions_collection.update_one(
-                {"_id": session_doc["_id"]},
-                {"$set": {"identity": {"type": identity["type"], "name": identity["name"]}}}
-            )
-            session_doc["identity"] = {"type": identity["type"], "name": identity["name"]}
-        messages = session_doc.get("messages", [])
-        greeted = bool(session_doc.get("greeted", False))
-        name_for_greet = identity["name"] or user_id
-    except Exception as e:
-        return jsonify({"error": f"Gagal memuat sesi: {str(e)}"}), 500
-
-    def maybe_prefix_greeting(text: str) -> str:
-        nonlocal greeted
-        if not greeted:
-            text = f"{_greeting_prefix(name_for_greet)}\n\n{text}".strip()
-            greeted = True
-        return text
-
-    # 4) message kosong → summary/welcome
+    if not user_field:
+        return jsonify({"error": "Field 'user' wajib diisi dengan format 'userid@nama'."}), 400
+    if not session_id:
+        return jsonify({"error": "Field 'session_id' wajib diisi. Pilih/ buat session terlebih dahulu."}), 400
     if not user_msg:
-        if len(messages) > 1:
-            history_for_summary = _trim_for_model(messages[:])
-            history_for_summary.append({"role": "user", "content": "Ringkas seluruh percakapan sebelumnya dalam 1 kalimat bahasa Indonesia."})
-            try:
-                summary_completion = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=history_for_summary,
-                    temperature=0.2,
-                )
-                summary_text = summary_completion.choices[0].message.content or ""
-                if not summary_text.strip():
-                    last_user_msgs = [m["content"] for m in messages if m.get("role") == "user"][-2:]
-                    joined = "; ".join(last_user_msgs) if last_user_msgs else "Percakapan singkat."
-                    summary_text = f"Ringkasan singkat: {joined}"
-                summary_text = maybe_prefix_greeting(summary_text)
-                messages.append({"role": "assistant", "content": summary_text})
-                update_res = sessions_collection.update_one(
-                    {"_id": session_doc["_id"]},
-                    {"$set": {"messages": messages, "updated_at": datetime.utcnow(), "greeted": greeted}}
-                )
-                return jsonify({
-                    "session_id": sid,
-                    "messages": messages,
-                    "answer": summary_text,
-                    "identity": {"type": identity["type"], "name": identity["name"]},
-                    "db_updated": update_res.acknowledged,
-                    "db_match": update_res.matched_count,
-                    "db_modified": update_res.modified_count
-                })
-            except Exception as e:
-                return jsonify({"error": f"Gagal merangkum chat: {str(e)}"}), 500
-        else:
-            welcome_msg = maybe_prefix_greeting("Sesi baru dimulai. Silakan ketik pesan Anda untuk memulai percakapan.")
-            messages.append({"role": "assistant", "content": welcome_msg})
-            update_res = sessions_collection.update_one(
-                {"_id": session_doc["_id"]},
-                {"$set": {"messages": messages, "updated_at": datetime.utcnow(), "greeted": greeted}}
-            )
-            return jsonify({
-                "session_id": sid,
-                "messages": messages,
-                "answer": welcome_msg,
-                "identity": {"type": identity["type"], "name": identity["name"]},
-                "db_updated": update_res.acknowledged,
-                "db_match": update_res.matched_count,
-                "db_modified": update_res.modified_count
-            })
+        return jsonify({"error": "Pesan kosong."}), 400
 
-    # 5) Ada pesan user → kirim ke LLM + tools
-    messages.append({"role": "user", "content": user_msg})
-    tool_runs = []
     try:
+        userid, name = parse_user(user_field)
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+
+    if not mongo_client:
+        return jsonify({"error": "MongoDB tidak tersedia"}), 500
+
+    # Ambil dokumen dan sesi
+    doc = users_chats.find_one({"name": name})
+    if not doc:
+        return jsonify({"error": f"Nama '{name}' belum terdaftar. Buat session baru melalui /api/sessions."}), 404
+
+    sess = find_session(doc, session_id)
+    if not sess:
+        return jsonify({"error": f"session_id '{session_id}' tidak ditemukan untuk nama '{name}'."}), 404
+
+    # === RIWAYAT PENUH (untuk DB) ===
+    messages_full: List[dict] = sess.get("messages", []) or []
+    if not messages_full:
+        messages_full = [{"role": "system", "content": DEFAULT_SYSTEM_PROMPT}]
+
+    # Tambahkan pesan user ke RIWAYAT PENUH
+    messages_full.append({"role": "user", "content": user_msg})
+
+    # Helper: pangkas konteks untuk model (system pertama + N terakhir)
+    def _ctx_slice(msgs: List[dict]) -> List[dict]:
+        if len(msgs) > MAX_HISTORY_MESSAGES:
+            return [msgs[0]] + msgs[-MAX_HISTORY_MESSAGES:]
+        return msgs
+
+    tool_runs = []
+    final_text = ""
+
+    try:
+        # --- Panggilan pertama: deteksi tool ---
+        ctx_messages = _ctx_slice(messages_full)
         first = client.chat.completions.create(
             model="gpt-4o",
-            messages=_trim_for_model(messages),
+            messages=ctx_messages,
             tools=TOOLS_SPEC,
             tool_choice="auto",
             temperature=0.2,
@@ -833,197 +352,288 @@ def chat():
         tool_calls = getattr(resp_msg, "tool_calls", None)
 
         if tool_calls:
-            assistant_msg = {
+            # simpan echo assistant (opsional)
+            messages_full.append({
                 "role": "assistant",
                 "content": resp_msg.content or None,
                 "tool_calls": [
-                    {"id": tc.id, "type": tc.type, "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                    {
+                        "id": tc.id,
+                        "type": tc.type,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
                     for tc in tool_calls
                 ],
-            }
-            messages.append(assistant_msg)
+            })
 
             for tc in tool_calls:
                 fname = tc.function.name
-                fargs = json.loads(tc.function.arguments or "{}")
+                try:
+                    fargs = json.loads(tc.function.arguments or "{}")
+                except Exception:
+                    fargs = {}
+
                 try:
                     out = AVAILABLE_FUNCS[fname](**fargs)
-                    _log_tool_call(user_id, sid, fname, fargs, out)
+                    _log_tool_call(userid, name, session_id, fname, fargs, out)
                     result_json = json.dumps(out, ensure_ascii=False)
                 except Exception as fn_err:
                     err_obj = {"error": str(fn_err)}
-                    _log_tool_call(user_id, sid, fname, fargs, err_obj)
+                    _log_tool_call(userid, name, session_id, fname, fargs, err_obj)
                     result_json = json.dumps(err_obj, ensure_ascii=False)
-                tool_runs.append({"name": fname, "args": fargs, "result": json.loads(result_json)})
-                messages.append({"role": "tool", "tool_call_id": tc.id, "name": fname, "content": result_json})
 
+                tool_runs.append({"name": fname, "args": fargs, "result": json.loads(result_json)})
+                messages_full.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "name": fname,
+                    "content": result_json,
+                })
+
+            # --- Panggilan kedua: susun jawaban final ---
+            ctx_messages_2 = _ctx_slice(messages_full)
             second = client.chat.completions.create(
                 model="gpt-4o",
-                messages=_trim_for_model(messages),
+                messages=ctx_messages_2,
                 temperature=0.2,
             )
             final_text = second.choices[0].message.content or ""
+            messages_full.append({"role": "assistant", "content": final_text})
         else:
             final_text = resp_msg.content or ""
+            messages_full.append({"role": "assistant", "content": final_text})
 
-        if not session_doc.get("greeted"):
-            final_text = f"{_greeting_prefix(name_for_greet)}\n\n{final_text}".strip()
-
-        messages.append({"role": "assistant", "content": final_text})
-        update_res = sessions_collection.update_one(
-            {"_id": session_doc["_id"]},
-            {"$set": {"messages": messages, "updated_at": datetime.utcnow(), "greeted": True}}
-        )
+        # Simpan BALIK riwayat PENUH (tidak terpangkas)
+        upsert_session_messages(name=name, session_id=session_id, messages=messages_full)
 
         return jsonify({
-            "session_id": sid,
+            "name": name,
+            "session_id": session_id,
             "answer": final_text,
-            "tool_runs": tool_runs,
-            "messages": messages,
-            "identity": {"type": identity["type"], "name": identity["name"]},
-            "db_updated": update_res.acknowledged,
-            "db_match": update_res.matched_count,
-            "db_modified": update_res.modified_count
+            "tool_runs": tool_runs
         })
     except Exception as e:
-        return jsonify({"error": f"Gagal memproses: {type(e).__name__}", "session_id": sid}), 500
+        return jsonify({"error": f"Gagal memproses: {type(e).__name__}", "detail": str(e)}), 500
 
-@app.route("/api/info", methods=["GET"])
-def info():
+# ---------- NOTIFY INVITE ----------
+@app.route("/api/notify/invite", methods=["POST"])
+def notify_invite():
     """
-    Untuk tombol Information:
-    - Validasi user_id via API Admin.
-    - Jika type=talent → ambil profil talent (raw) dan job-openings via API.
-    - Minta GPT lakukan ranking rekomendasi.
-    - Kembalikan messages (string siap tampil) + latest_openings (raw) + model_result (detail skor).
+    POST /api/notify/invite
+    Body:
+    {
+      "sender": "userCompany@Nama Perusahaan",  # WAJIB
+      "target": "userTalent@Nama Talent",       # WAJIB
+      "message": "opsional pesan kustom",
+      "system_prompt": "opsional system prompt untuk sesi talent"
+    }
     """
-    user_id = request.args.get("user_id", "").strip()
-    limit = int(request.args.get("limit", "30"))
-    limit = max(1, min(limit, 100))
-    if not user_id:
-        return jsonify({"error": "user_id harus disediakan."}), 400
-
+    # Auth
     try:
         incoming_token = _extract_bearer_token(request)
         ensure_token(preferred_token=incoming_token if incoming_token else None)
-        identity = _require_identity(user_id)
-    except ValueError as ve:
-        return jsonify({"error": str(ve)}), 400
     except Exception as e:
         return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
 
-    # Ambil profil talent
-    talent_data = None
-    if identity["type"] == "talent":
-        # Kalau raw belum detail, ambil ulang by id kalau ada
-        t_raw = identity["raw"] or {}
-        tid = t_raw.get("id")
-        if tid:
-            try:
-                talent_data = get_talent_detail(int(tid))
-            except Exception:
-                talent_data = t_raw
-        else:
-            talent_data = t_raw
-    else:
-        # Jika login sebagai company, butuh talent_id eksplisit
-        talent_id = request.args.get("talent_id", "").strip()
-        if not talent_id:
-            return jsonify({"error": "Untuk company, sertakan talent_id pada query untuk rekomendasi."}), 400
-        tid = _parse_int(talent_id)
-        if tid is None:
-            return jsonify({"error": "talent_id harus berupa angka."}), 400
-        try:
-            talent_data = get_talent_detail(tid)
-        except Exception:
-            return jsonify({"error": "Talent tidak ditemukan pada API Admin."}), 404
+    data = request.get_json(force=True)
+    sender_field = (data.get("sender") or "").strip()
+    target_field = (data.get("target") or "").strip()
+    custom_msg = (data.get("message") or "").strip()
+    sys_prompt = data.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
 
-    # Ambil job openings
+    # Validasi input
+    if not sender_field or "@" not in sender_field:
+        return jsonify({"error": "Field 'sender' wajib format 'userid@Nama Perusahaan'."}), 400
+    if not target_field or "@" not in target_field:
+        return jsonify({"error": "Field 'target' wajib format 'userid@Nama Talent'."}), 400
+
     try:
-        openings = list_job_openings(page=1, per_page=limit, search=None) or []
-        # Jika API Anda mengembalikan dict {data: [...]}, normalisasi:
-        if isinstance(openings, dict) and "data" in openings and isinstance(openings["data"], list):
-            openings = openings["data"]
-        if not isinstance(openings, list):
-            openings = []
-    except Exception:
-        return jsonify({"error": "Gagal mengambil job openings dari API Admin."}), 502
-    openings = _enrich_openings_with_company(openings)
+        sender_userid, sender_name = parse_user(sender_field)
+        target_userid, target_name = parse_user(target_field)
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
 
-    ranking = _llm_rank_jobs(talent_data or {}, openings)
-    try:
-        top_n = int(request.args.get("top", "1"))
-    except Exception:
-        top_n = 1
-        top_n = max(1, min(top_n, 10))
-        selected = (ranking[:top_n] if isinstance(ranking, list) else [])
+    if not mongo_client:
+        return jsonify({"error": "MongoDB tidak tersedia"}), 500
 
-# Ambil hanya N teratas (default 1)
-    selected = (ranking[:top_n] if isinstance(ranking, list) else [])
+    # Pastikan dokumen target ada (kalau belum, buat baru)
+    target_before = users_chats.find_one({"name": target_name})
+    get_or_create_name_doc(name=target_name, userid=target_userid)
 
-# Format 1 baris pesan per item yang dipilih (default 1 baris saja)
-    messages = []
-    if selected:
-        first = selected[0]
-        title = first.get("title") or "(nama job opening)"
-        company = first.get("company_name") or ""   # ← ambil nama company dari hasil ranking
-        outreach = _format_outreach_message(title, company_name=company)
-        messages = [outreach]
-    else:
-        messages = ["Maaf, belum ada lowongan yang cocok saat ini."]
-# Optional: rampingkan 'latest_openings' agar aman ditampilkan
-    def _safe_opening(o: dict) -> dict:
-        if not isinstance(o, dict):
-            return {}
-        comp = o.get("company") or {}
-        return {
-            "id": o.get("id"),
-            "title": o.get("title"),
-            "company_id": o.get("company_id") or comp.get("id"),
-            "company_name": o.get("company_name") or comp.get("name"),
-            "location": o.get("location") or o.get("city") or o.get("region"),
-            "due_date": o.get("due_date"),
-            "status": o.get("status"),
-        }
+    # Pesan undangan
+    default_text = f"PT {sender_name} mengundang Anda untuk mengikuti seleksi. Silakan konfirmasi kehadiran atau ajukan pertanyaan di sini."
+    invite_text = custom_msg or default_text
 
-    safe_openings = [_safe_opening(x) for x in openings[:50]]
+    # Buat session baru di dokumen target dengan pesan awal
+    sid, created_at = create_session_with_initial_message(
+        name=target_name,
+        system_prompt=sys_prompt,
+        initial_message=invite_text
+    )
 
     return jsonify({
-        "identity": {"type": identity["type"], "name": identity["name"]},
-        "talent": {
-        "name": _display_name_from_obj(talent_data or {}, "talent"),
-        "skills": _extract_skills_from_talent(talent_data or {})
-        },
-        "messages": messages,            # ← kini berformat sesuai template
-        "model_result": selected,        # tetap kirim data top-N untuk kebutuhan UI lain
-        "latest_openings": safe_openings,
-        "top": top_n
-    })
-    messages = []
-    for rec in ranking[:10]:
-        title = rec.get("title") or "(tanpa judul)"
-        compn = rec.get("company_name") or "(perusahaan tidak teridentifikasi)"
-        score = rec.get("score") if isinstance(rec.get("score"), (int, float)) else "-"
-        reason = rec.get("reason") or ""
-        messages.append(f"Rekomendasi: {title} di {compn} — skor {score}. Alasan: {reason}")
+        "ok": True,
+        "target_name": target_name,
+        "created_new_user": target_before is None,
+        "session_id": sid,
+        "created_at": created_at.isoformat(),
+        "message": invite_text
+    }), 201
 
-    if not messages:
-        messages = ["Informasi umum: tidak ada lowongan yang cocok saat ini."]
+# ---------- SESSION SUMMARY ----------
+@app.route("/api/session/summary", methods=["GET"])
+def session_summary():
+    """
+    GET /api/session/summary?user=userid@nama&session_id=...&max_words=40
+    Mengembalikan ringkasan SANGAT SINGKAT (5 kalimat, <= max_words kata total).
+    Jika sesi baru (hanya 1 bubble assistant/sapaan), ringkasan di-skip.
+    """
+    # Auth
+    try:
+        incoming_token = _extract_bearer_token(request)
+        ensure_token(preferred_token=incoming_token if incoming_token else None)
+    except Exception as e:
+        return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
+
+    user_field = (request.args.get("user") or "").strip()
+    session_id = (request.args.get("session_id") or "").strip()
+    max_words = (request.args.get("max_words") or "40").strip()
+    try:
+        max_words = max(10, min(80, int(max_words)))
+    except Exception:
+        max_words = 40
+
+    if not user_field or "@" not in user_field:
+        return jsonify({"error": "Param 'user' wajib format id@nama"}), 400
+    if not session_id:
+        return jsonify({"error": "Param 'session_id' wajib diisi"}), 400
+
+    try:
+        userid, name = parse_user(user_field)
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+
+    if not mongo_client:
+        return jsonify({"error": "MongoDB tidak tersedia"}), 500
+
+    doc = users_chats.find_one({"name": name})
+    if not doc:
+        return jsonify({"error": f"Nama '{name}' belum terdaftar"}), 404
+
+    sess = find_session(doc, session_id)
+    if not sess:
+        return jsonify({"error": f"session_id '{session_id}' tidak ditemukan untuk '{name}'"}), 404
+
+    # Ambil pesan untuk ringkasan
+    msgs = sess.get("messages", [])
+    if len(msgs) > 81:
+        msgs = [msgs[0]] + msgs[-80:]
+
+    # Deteksi sesi baru (hanya sapaan)
+    non_system = [m for m in msgs if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()]
+    just_greeting = (len(non_system) == 1 and non_system[0].get("role") == "assistant")
+
+    if just_greeting:
+        return jsonify({
+            "name": name,
+            "session_id": session_id,
+            "summary": "",
+            "kind": "summary_preview",
+            "skip": True,
+            "reason": "just_greeting"
+        })
+
+    # System prompt ringkasan
+    summarize_system = (
+        "Ringkas percakapan berikut dengan SANGAT SINGKAT untuk log internal. "
+        "Output wajib 5 kalimat saja, maksimum {MAX_WORDS} kata total. "
+        "Fokus pada: topik utama yang sedang dibahas dan keputusan/aksi berikutnya (jika ada). "
+        "JANGAN pakai bullet/nomor, JANGAN menyalin daftar panjang, "
+        "JANGAN mencantumkan ID/tanggal/angka serial yang tidak penting. "
+        "Jangan tulis kata 'Ringkasan:' atau sapaan; langsung isi. "
+    ).replace("{MAX_WORDS}", str(max_words))
+
+    summary_messages = [{"role": "system", "content": summarize_system}]
+    for m in msgs:
+        r = m.get("role")
+        if r in ("user", "assistant"):
+            c = (m.get("content") or "").strip()
+            if c:
+                summary_messages.append({"role": r, "content": c})
+
+    def _limit_words(text: str, limit: int) -> str:
+        words = text.split()
+        return " ".join(words[:limit]) + ("" if len(words) <= limit else "…")
+
+    try:
+        comp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=summary_messages,
+            temperature=0.1,
+            max_tokens=160,
+        )
+        summary_text = (comp.choices[0].message.content or "").strip()
+        summary_text = _limit_words(summary_text, max_words)
+    except Exception as e:
+        return jsonify({"error": f"Gagal merangkum: {type(e).__name__}", "detail": str(e)}), 500
 
     return jsonify({
-        "identity": {"type": identity["type"], "name": identity["name"]},
-        "talent": {
-            "name": _display_name_from_obj(talent_data or {}, "talent"),
-            "skills": _extract_skills_from_talent(talent_data or {})
-        },
-        "messages": messages,
-        "latest_openings": openings[:limit],
-        "model_result": ranking
+        "name": name,
+        "session_id": session_id,
+        "summary": summary_text,
+        "kind": "summary_preview",
+        "skip": False
     })
 
-# =========================
-# Main
-# =========================
+# ---------- SESSION MESSAGES ----------
+@app.get("/api/session/messages")
+def get_session_messages():
+    """
+    GET /api/session/messages?user=userid@nama&session_id=...
+    Mengembalikan daftar messages (tanpa memodifikasi apa pun).
+    """
+    try:
+        incoming_token = _extract_bearer_token(request)
+        ensure_token(preferred_token=incoming_token if incoming_token else None)
+    except Exception as e:
+        return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
+
+    user_field = (request.args.get("user") or "").strip()
+    session_id = (request.args.get("session_id") or "").strip()
+    if not user_field or "@" not in user_field:
+        return jsonify({"error": "Param 'user' wajib format id@nama"}), 400
+    if not session_id:
+        return jsonify({"error": "Param 'session_id' wajib diisi"}), 400
+
+    try:
+        userid, name = parse_user(user_field)
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+
+    if not mongo_client:
+        return jsonify({"error": "MongoDB tidak tersedia"}), 500
+
+    doc = users_chats.find_one({"name": name})
+    if not doc:
+        return jsonify({"error": f"Nama '{name}' belum terdaftar"}), 404
+
+    sess = find_session(doc, session_id)
+    if not sess:
+        return jsonify({"error": f"session_id '{session_id}' tidak ditemukan untuk '{name}'"}), 404
+
+    msgs = sess.get("messages", []) or []
+    return jsonify({
+        "name": name,
+        "session_id": session_id,
+        "messages": msgs
+    })
+
+# ======================================================================
+# MAIN
+# ======================================================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     host = os.environ.get("HOST", "127.0.0.1")
