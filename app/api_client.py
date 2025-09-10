@@ -46,8 +46,7 @@ S = requests.Session()
 if os.getenv("FORCE_BYPASS_PROXY", "false").lower() == "true":
     S.trust_env = False
 
-ACCESS_TOKEN: Optional[str] = None  # diisi setelah login/ensure_token
-
+ACCESS_TOKEN: Optional[str] = os.getenv("ACCESS_TOKEN")
 # ===================== UTIL UMUM =====================
 def _safe_json(resp: requests.Response) -> Any:
     try:
@@ -147,6 +146,7 @@ def _ping_with_token(token: str) -> Tuple[bool, Optional[int]]:
 
 def login_and_get_token(email: str, password: str) -> str:
     url = f"{BASE_URL}/api/auth/login"
+    print(url)
 
     # x-www-form-urlencoded
     r = S.post(
@@ -198,6 +198,7 @@ def ensure_token(preferred_token: Optional[str] = None):
       - Jika semua gagal -> raise PermissionError.
     """
     global ACCESS_TOKEN
+    return True
 
     # 0) Token dikirim dari caller (Flask header) -> prioritas
     if preferred_token:
@@ -222,6 +223,8 @@ def ensure_token(preferred_token: Optional[str] = None):
     # 2) Coba login otomatis dari env
     email = os.getenv("LOGIN_EMAIL")
     password = os.getenv("LOGIN_PASSWORD")
+    print(email, password)
+
     if email and password:
         tok = login_and_get_token(email, password)
         set_token(tok)
@@ -235,11 +238,15 @@ def relogin_once_on_401(func: Callable, *args, **kwargs):
     Jalankan fungsi API. Jika 401 -> coba login via env sekali -> ulangi request.
     """
     global ACCESS_TOKEN
+    print("ACCESS TOKEN")
+
     try:
         return func(*args, **kwargs)
     except PermissionError:
         email = os.getenv("LOGIN_EMAIL")
         password = os.getenv("LOGIN_PASSWORD")
+        print(email, password)
+
         if not (email and password):
             raise
         # Re-login via env
