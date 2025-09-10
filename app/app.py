@@ -157,10 +157,10 @@ def create_session_with_initial_message(name: str, system_prompt: str, initial_m
     sid = str(uuid4())
     created_at = datetime.utcnow()
     messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "assistant", "content": initial_message},
+        {"role": "system", "content": system_prompt, "timestamp": created_at.isoformat()},
+        {"role": "assistant", "content": initial_message, "timestamp": created_at.isoformat()},
     ]
-    append_session(name=name, session_id=sid, created_at=created_at, messages=messages)
+    append_session(name=name, session_id=sid, created_at=created_at, messages=messages, title="Percakapan Awal")
     return sid, created_at
 
 def _log_tool_call(userid: str, name: str, session_id: str, function_name: str, args: dict, result: Any):
@@ -323,6 +323,8 @@ def create_session():
     })
 
 # ---------- CHAT ----------
+# app.py
+
 @app.route("/api/chat", methods=["POST"])
 def chat():
     """
@@ -364,19 +366,17 @@ def chat():
     # Siapkan variabel
     messages_full: List[dict] = []
     
-    # --- LOGIKA BARU UNTUK MENANGANI DUA KASUS ---
+    # --- LOGIKA UNTUK MENANGANI DUA KASUS ---
     if is_new_session:
         # KASUS 1: Sesi baru
         session_id = str(uuid4()) # Buat ID baru di sini
-        # Pastikan dokumen user ada
         get_or_create_name_doc(name=name, userid=userid)
-        # Riwayat dimulai dengan system prompt dan pesan pertama user
         messages_full = [
-            {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg}
+            {"role": "system", "content": DEFAULT_SYSTEM_PROMPT, "timestamp": datetime.utcnow().isoformat()},
+            {"role": "user", "content": user_msg, "timestamp": datetime.utcnow().isoformat()}
         ]
     else:
-        # KASUS 2: Sesi yang sudah ada (logika lama)
+        # KASUS 2: Sesi yang sudah ada
         doc = users_chats.find_one({"name": name})
         if not doc:
             return jsonify({"error": f"Nama '{name}' belum terdaftar."}), 404
@@ -385,9 +385,9 @@ def chat():
             return jsonify({"error": f"session_id '{session_id}' tidak ditemukan untuk nama '{name}'."}), 404
         
         messages_full = sess.get("messages", [])
-        messages_full.append({"role": "user", "content": user_msg})
+        messages_full.append({"role": "user", "content": user_msg, "timestamp": datetime.utcnow().isoformat()})
 
-    # --- LOGIKA PEMBUATAN JUDUL DAN PEMROSESAN MODEL ---
+    # --- LOGIKA PEMBUATAN JUDUL ---
     user_message_count = sum(1 for m in messages_full if m.get("role") == "user")
     if user_message_count == 1 and user_msg:
         try:
@@ -428,31 +428,23 @@ def chat():
         tool_calls = getattr(resp_msg, "tool_calls", None)
 
         if tool_calls:
-            # simpan echo assistant yang meminta pemanggilan tool
             messages_full.append({
                 "role": "assistant",
                 "content": resp_msg.content or None,
                 "tool_calls": [
                     {
-                        "id": tc.id,
-                        "type": tc.type,
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
+                        "id": tc.id, "type": tc.type,
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
                     }
                     for tc in tool_calls
                 ],
+                "timestamp": datetime.utcnow().isoformat()
             })
 
-            # Jalankan setiap tool yang diminta
             for tc in tool_calls:
                 fname = tc.function.name
-                try:
-                    fargs = json.loads(tc.function.arguments or "{}")
-                except Exception:
-                    fargs = {}
-
+                try: fargs = json.loads(tc.function.arguments or "{}")
+                except Exception: fargs = {}
                 try:
                     out = AVAILABLE_FUNCS[fname](**fargs)
                     _log_tool_call(userid, name, session_id, fname, fargs, out)
@@ -461,64 +453,46 @@ def chat():
                     err_obj = {"error": str(fn_err)}
                     _log_tool_call(userid, name, session_id, fname, fargs, err_obj)
                     result_json = json.dumps(err_obj, ensure_ascii=False)
-
                 tool_runs.append({"name": fname, "args": fargs, "result": json.loads(result_json)})
                 messages_full.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "name": fname,
-                    "content": result_json,
+                    "role": "tool", "tool_call_id": tc.id, "name": fname, "content": result_json,
+                    "timestamp": datetime.utcnow().isoformat()
                 })
 
-            # --- Panggilan kedua: susun jawaban final berdasarkan hasil tool ---
+            # --- Panggilan kedua: susun jawaban final ---
             ctx_messages_2 = _ctx_slice(messages_full)
-            second = client.chat.completions.create(
-                model="gpt-4o",
-                messages=ctx_messages_2,
-                temperature=0.2,
-            )
+            second = client.chat.completions.create(model="gpt-4o", messages=ctx_messages_2, temperature=0.2)
             final_text = second.choices[0].message.content or ""
         else:
-            # Jika tidak ada tool yang dipanggil, langsung gunakan respons pertama
             final_text = resp_msg.content or ""
 
-        messages_full.append({"role": "assistant", "content": final_text})
+        messages_full.append({"role": "assistant", "content": final_text, "timestamp": datetime.utcnow().isoformat()})
         
-        # --- LOGIKA PENYIMPANAN KE DB BARU ---
+        # --- LOGIKA PENYIMPANAN KE DB ---
         if is_new_session:
-            # Jika ini sesi baru, tambahkan seluruh objek sesi ke array
             append_session(
-                name=name,
-                session_id=session_id,
-                created_at=datetime.utcnow(),
-                messages=messages_full,
-                title=generated_title or "Percakapan Baru"
+                name=name, session_id=session_id, created_at=datetime.utcnow(),
+                messages=messages_full, title=generated_title or "Percakapan Baru"
             )
         else:
-            # Jika sesi lama, cukup update pesannya
             upsert_session_messages(name=name, session_id=session_id, messages=messages_full)
-            # Jika ada judul baru yang di-generate (meskipun jarang terjadi di sesi lama), update juga
             if generated_title:
                 update_session_title(name, session_id, generated_title)
 
-        # --- LOGIKA RESPONSE BARU ---
+        # --- LOGIKA RESPONSE ---
         response_data = {
-            "name": name,
-            "session_id": session_id,
-            "answer": final_text,
-            "tool_runs": tool_runs
+            "name": name, "session_id": session_id,
+            "answer": final_text, "tool_runs": tool_runs
         }
-        # Tambahkan ID sesi baru jika ini adalah sesi baru
         if is_new_session:
             response_data["new_session_id"] = session_id
-            response_data["title"] = generated_title or "Percakapan Baru"
+            response_data["title"] = generated_title or "Percakapan Baru" 
 
         return jsonify(response_data)
-        
 
     except Exception as e:
         return jsonify({"error": f"Gagal memproses: {type(e).__name__}", "detail": str(e)}), 500
-            
+               
     # ---------- NOTIFY INVITE ----------
 @app.route("/api/notify/invite", methods=["POST"])
 def notify_invite():
