@@ -76,6 +76,13 @@ DEFAULT_SYSTEM_PROMPT = (
     "Berikan jawaban yang ringkas, hanya tampilkan field-field kunci. "
     "Jika sebuah operasi gagal, berikan pesan error yang singkat dan jelas. "
     "Selalu balas dalam Bahasa Indonesia. "
+    
+    # --- 🔥 TAMBAHKAN INSTRUKSI BARU DI SINI 🔥 ---
+    "PENTING: Ketika Anda menerima hasil dari sebuah pemanggilan tool (function call), JANGAN PERNAH menampilkan data mentah JSON kepada pengguna. "
+    "Tugas Anda adalah menginterpretasikan data tersebut dan menyajikannya dalam format yang mudah dibaca, seperti kalimat lengkap, daftar bernomor, atau ringkasan. "
+    "Misalnya, jika Anda menerima daftar talent dalam format JSON, ubah itu menjadi daftar nama dan posisi yang rapi."
+    # --- Batas instruksi baru ---
+
     "Saat menjelaskan sesuatu, JANGAN GUNAKAN FORMAT MARKDOWN seperti bintang (**) untuk bold atau tanda hubung (-) untuk daftar. "
     "Gunakan kalimat lengkap dalam bentuk paragraf atau daftar bernomor (1., 2., 3.) jika diperlukan untuk membuat penjelasan yang rapi dan mudah dibaca."
 )
