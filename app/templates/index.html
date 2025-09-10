@@ -108,7 +108,7 @@
     const btnNew = $("btnNew");
     const btnSend = $("btnSend");
 
-    let selectedSession = localStorage.getItem("chat_selected_session") || "";
+    let selectedSession = localStorage.getItem("chat_selected_session") || null;
     let messagesInView = [];
     let currentSessions = []; // cache hasil /api/sessions
 
@@ -219,15 +219,12 @@
         btn.className = "sess" + (selectedSession === s.session_id ? " active" : "");
         btn.dataset.sid = s.session_id;
         
-        // --- 🔥 INI PERBAIKANNYA 🔥 ---
-        // Menampilkan s.title (judul) bukan s.session_id
         btn.innerHTML = `
           <div class="id">${s.title}</div>
           <div class="meta">Dibuat: ${s.created_at ? new Date(s.created_at).toLocaleString() : "-"}</div>
           <div class="meta">Pesan: ${s.messages_count ?? 0}</div>
         `;
         
-        // klik sesi lama → isNew = false
         btn.onclick = () => activateSession(s.session_id, false);
         sessionsEl.appendChild(btn);
       });
@@ -247,29 +244,25 @@
       // reset
       messagesInView = [];
       chatEl.innerHTML = "<div class='meta'>Memuat pesan…</div>";
-      showSummary(""); // sembunyikan dulu
+      showSummary(""); 
 
       try{
-        // Ambil riwayat pesan (bukan summary)
         const data = await api(`/api/session/messages?user=${encodeURIComponent(u)}&session_id=${encodeURIComponent(selectedSession)}`);
         const allMsgs = (data.messages || []);
         const nonSystem = allMsgs.filter(m => !!m && m.role !== "system");
 
-        // Deteksi otomatis sesi baru: hanya 1 bubble assistant (sapaan)
         const justGreeting = (nonSystem.length === 1 && nonSystem[0].role === "assistant");
         const isNew = isNewExplicit || justGreeting;
 
         chatEl.innerHTML = "";
 
         if(isNew){
-          // Sesi baru → tampilkan pesan (sapaan) saja
           if(!nonSystem.length){
             addMsg("assistant", "(Belum ada pesan)");
           }else{
             nonSystem.forEach(m => addMsg(m.role === "user" ? "user" : "assistant", m.content || ""));
           }
         }else{
-          // Sesi lama → tampilkan ringkasan di panel, lalu history
           try{
             const sum = await api(`/api/session/summary?user=${encodeURIComponent(u)}&session_id=${encodeURIComponent(selectedSession)}`);
             if(!sum.skip && (sum.summary || "").trim()){
@@ -299,18 +292,17 @@
     }
 
     async function newSession(){
-      const u = userEl.value.trim();
-      if(!validUser(u)){ showBanner("Isi user dengan format: id@nama", "err"); return; }
-      try{
-        const data = await api("/api/sessions", { user: u });
-        selectedSession = data.session_id;
-        savePrefs();
-        await loadSessions();                       // refresh daftar
-        await activateSession(selectedSession, true); // isNew = true → sapaan saja
-        showBanner("Sesi baru dibuat. Session aktif: " + selectedSession, "ok");
-      }catch(e){
-        showBanner(e.message || "Gagal membuat sesi baru", "err");
-      }
+      selectedSession = null;
+      savePrefs();
+
+      document.querySelectorAll(".sess").forEach(x => x.classList.remove("active"));
+      chatEl.innerHTML = "<div class='meta'>Ketik pesan untuk memulai percakapan baru.</div>";
+      summaryEl.style.display = "none";
+      showBanner("Mode percakapan baru. Sesi akan dibuat setelah Anda mengirim pesan pertama.", "ok");
+      
+      inputEl.disabled = false;
+      btnSend.disabled = false;
+      inputEl.focus();
     }
 
     // =========================
@@ -325,7 +317,7 @@
       meta.textContent = new Date().toLocaleTimeString();
       box.appendChild(meta);
       chatEl.appendChild(box);
-      chatEl.scrollTop = chatEl.scrollHeight; // auto-scroll ke bawah untuk lihat pesan terbaru
+      chatEl.scrollTop = chatEl.scrollHeight; 
       messagesInView.push({role, content});
     }
 
@@ -333,14 +325,34 @@
       const u = userEl.value.trim();
       const msg = inputEl.value;
       if(!validUser(u)){ showBanner("Isi user dengan format: id@nama", "err"); return; }
-      if(!selectedSession){ showBanner("Pilih atau buat session terlebih dahulu.", "err"); return; }
       if(!msg.trim()) return;
 
+      const isNewChat = !selectedSession;
+
+      if (isNewChat && chatEl.querySelector(".meta")) {
+        chatEl.innerHTML = "";
+      }
+      
       addMsg("user", msg);
       inputEl.value = "";
+      
       try{
-        const res = await api("/api/chat", { user: u, session_id: selectedSession, message: msg });
+        const payload = { user: u, message: msg };
+        if (!isNewChat) {
+            payload.session_id = selectedSession;
+        }
+
+        const res = await api("/api/chat", payload);
+        
         addMsg("assistant", res.answer || "(kosong)");
+
+        if (res.new_session_id) {
+            selectedSession = res.new_session_id;
+            savePrefs();
+            showBanner("Sesi baru berhasil dibuat. Session aktif: " + selectedSession, "ok");
+            await loadSessions(); 
+        }
+
       }catch(e){
         addMsg("assistant", "[error] " + (e.message || "Gagal mengirim pesan"));
       }
