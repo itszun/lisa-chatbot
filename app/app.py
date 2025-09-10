@@ -327,31 +327,26 @@ def create_session():
 def chat():
     """
     POST /api/chat
-    Body minimal:
-      {
-        "user": "userid@nama",   # WAJIB
-        "session_id": "...",     # WAJIB
-        "message": "..."         # WAJIB
-      }
+    Endpoint ini sekarang menangani DUA kasus:
+    1. Jika `session_id` diberikan: Melanjutkan chat di sesi yang ada.
+    2. Jika `session_id` TIDAK diberikan: Membuat sesi baru dengan pesan pertama.
     """
     data = request.get_json(force=True)
 
-    # Auth: Memastikan token API valid
+    # Auth
     try:
         incoming_token = _extract_bearer_token(request)
         ensure_token(preferred_token=incoming_token if incoming_token else None)
     except Exception as e:
         return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
 
-    # Validasi: Memastikan semua field yang dibutuhkan ada dan sesuai format
+    # Validasi
     user_field = (data.get("user") or "").strip()
-    session_id = (data.get("session_id") or "").strip()
     user_msg = (data.get("message") or "").strip()
+    session_id = data.get("session_id") # Ambil session_id, bisa jadi None
 
     if not user_field:
         return jsonify({"error": "Field 'user' wajib diisi dengan format 'userid@nama'."}), 400
-    if not session_id:
-        return jsonify({"error": "Field 'session_id' wajib diisi. Pilih/ buat session terlebih dahulu."}), 400
     if not user_msg:
         return jsonify({"error": "Pesan kosong."}), 400
 
@@ -363,30 +358,38 @@ def chat():
     if not mongo_client:
         return jsonify({"error": "MongoDB tidak tersedia"}), 500
 
-    # Pengambilan Data: Mencari dokumen dan sesi chat dari MongoDB
-    doc = users_chats.find_one({"name": name})
-    if not doc:
-        return jsonify({"error": f"Nama '{name}' belum terdaftar. Buat session baru melalui /api/sessions."}), 404
+    # Tentukan apakah ini sesi baru atau sesi yang sudah ada
+    is_new_session = not session_id
 
-    sess = find_session(doc, session_id)
-    if not sess:
-        return jsonify({"error": f"session_id '{session_id}' tidak ditemukan untuk nama '{name}'."}), 404
+    # Siapkan variabel
+    messages_full: List[dict] = []
+    
+    # --- LOGIKA BARU UNTUK MENANGANI DUA KASUS ---
+    if is_new_session:
+        # KASUS 1: Sesi baru
+        session_id = str(uuid4()) # Buat ID baru di sini
+        # Pastikan dokumen user ada
+        get_or_create_name_doc(name=name, userid=userid)
+        # Riwayat dimulai dengan system prompt dan pesan pertama user
+        messages_full = [
+            {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+            {"role": "user", "content": user_msg}
+        ]
+    else:
+        # KASUS 2: Sesi yang sudah ada (logika lama)
+        doc = users_chats.find_one({"name": name})
+        if not doc:
+            return jsonify({"error": f"Nama '{name}' belum terdaftar."}), 404
+        sess = find_session(doc, session_id)
+        if not sess:
+            return jsonify({"error": f"session_id '{session_id}' tidak ditemukan untuk nama '{name}'."}), 404
+        
+        messages_full = sess.get("messages", [])
+        messages_full.append({"role": "user", "content": user_msg})
 
-    # === RIWAYAT PENUH (untuk DB) ===
-    messages_full: List[dict] = sess.get("messages", []) or []
-    if not messages_full:
-        messages_full = [{"role": "system", "content": DEFAULT_SYSTEM_PROMPT}]
-
-    # >>>>> LOGIKA PEMBUATAN JUDUL DIMULAI DI SINI <<<<<
-    # Cek apakah ini pesan pertama dari pengguna dalam sesi ini
+    # --- LOGIKA PEMBUATAN JUDUL DAN PEMROSESAN MODEL ---
     user_message_count = sum(1 for m in messages_full if m.get("role") == "user")
-    is_first_user_message = (user_message_count == 0)
-
-    # Tambahkan pesan user ke RIWAYAT PENUH
-    messages_full.append({"role": "user", "content": user_msg})
-
-    # Jika ini pesan pertama dari pengguna, buat dan simpan judulnya
-    if is_first_user_message and user_msg:
+    if user_message_count == 1 and user_msg:
         try:
             title_prompt = (
                 "Anda adalah AI yang ahli membuat judul singkat. "
@@ -395,20 +398,17 @@ def chat():
                 f"Pesan pengguna: '{user_msg}'"
             )
             title_comp = client.chat.completions.create(
-                model="gpt-4o", 
-                messages=[{"role": "user", "content": title_prompt}],
-                temperature=0.2,
-                max_tokens=20
+                model="gpt-4o", messages=[{"role": "user", "content": title_prompt}],
+                temperature=0.2, max_tokens=20
             )
-            new_title = title_comp.choices[0].message.content.strip().replace('"', '')
-            if new_title:
-                update_session_title(name, session_id, new_title)
+            generated_title = title_comp.choices[0].message.content.strip().replace('"', '') or "Percakapan"
         except Exception as title_e:
-            # Jika gagal membuat judul, jangan hentikan proses chat. Cukup catat error.
+            generated_title = "Percakapan Baru"
             print(f"!! Gagal membuat judul untuk sesi {session_id}: {title_e}")
-    # >>>>> LOGIKA PEMBUATAN JUDUL SELESAI <<<<<
+    else:
+        generated_title = None
 
-    # Helper: pangkas konteks untuk model (system pertama + N terakhir)
+    # Helper pangkas konteks
     def _ctx_slice(msgs: List[dict]) -> List[dict]:
         if len(msgs) > MAX_HISTORY_MESSAGES:
             return [msgs[0]] + msgs[-MAX_HISTORY_MESSAGES:]
@@ -421,24 +421,25 @@ def chat():
         # --- Panggilan pertama: deteksi tool ---
         ctx_messages = _ctx_slice(messages_full)
         first = client.chat.completions.create(
-            model="gpt-4o",
-            messages=ctx_messages,
-            tools=TOOLS_SPEC,
-            tool_choice="auto",
-            temperature=0.2,
+            model="gpt-4o", messages=ctx_messages, tools=TOOLS_SPEC,
+            tool_choice="auto", temperature=0.2
         )
         resp_msg = first.choices[0].message
         tool_calls = getattr(resp_msg, "tool_calls", None)
 
         if tool_calls:
-            # Simpan pesan assistant yang berisi permintaan pemanggilan tool
+            # simpan echo assistant yang meminta pemanggilan tool
             messages_full.append({
                 "role": "assistant",
                 "content": resp_msg.content or None,
                 "tool_calls": [
                     {
-                        "id": tc.id, "type": tc.type,
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        "id": tc.id,
+                        "type": tc.type,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
                     }
                     for tc in tool_calls
                 ],
@@ -463,8 +464,10 @@ def chat():
 
                 tool_runs.append({"name": fname, "args": fargs, "result": json.loads(result_json)})
                 messages_full.append({
-                    "role": "tool", "tool_call_id": tc.id,
-                    "name": fname, "content": result_json,
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "name": fname,
+                    "content": result_json,
                 })
 
             # --- Panggilan kedua: susun jawaban final berdasarkan hasil tool ---
@@ -475,25 +478,45 @@ def chat():
                 temperature=0.2,
             )
             final_text = second.choices[0].message.content or ""
-            messages_full.append({"role": "assistant", "content": final_text})
         else:
             # Jika tidak ada tool yang dipanggil, langsung gunakan respons pertama
             final_text = resp_msg.content or ""
-            messages_full.append({"role": "assistant", "content": final_text})
 
-        # Simpan BALIK riwayat PENUH (tidak terpangkas) ke database
-        upsert_session_messages(name=name, session_id=session_id, messages=messages_full)
+        messages_full.append({"role": "assistant", "content": final_text})
+        
+        # --- LOGIKA PENYIMPANAN KE DB BARU ---
+        if is_new_session:
+            # Jika ini sesi baru, tambahkan seluruh objek sesi ke array
+            append_session(
+                name=name,
+                session_id=session_id,
+                created_at=datetime.utcnow(),
+                messages=messages_full,
+                title=generated_title or "Percakapan Baru"
+            )
+        else:
+            # Jika sesi lama, cukup update pesannya
+            upsert_session_messages(name=name, session_id=session_id, messages=messages_full)
+            # Jika ada judul baru yang di-generate (meskipun jarang terjadi di sesi lama), update juga
+            if generated_title:
+                update_session_title(name, session_id, generated_title)
 
-        # Kembalikan respons akhir ke klien
-        return jsonify({
+        # --- LOGIKA RESPONSE BARU ---
+        response_data = {
             "name": name,
             "session_id": session_id,
             "answer": final_text,
             "tool_runs": tool_runs
-        })
+        }
+        # Tambahkan ID sesi baru jika ini adalah sesi baru
+        if is_new_session:
+            response_data["new_session_id"] = session_id
+
+        return jsonify(response_data)
+
     except Exception as e:
         return jsonify({"error": f"Gagal memproses: {type(e).__name__}", "detail": str(e)}), 500
-    
+            
     # ---------- NOTIFY INVITE ----------
 @app.route("/api/notify/invite", methods=["POST"])
 def notify_invite():
