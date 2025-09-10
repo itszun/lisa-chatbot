@@ -511,8 +511,10 @@ def chat():
         # Tambahkan ID sesi baru jika ini adalah sesi baru
         if is_new_session:
             response_data["new_session_id"] = session_id
+            response_data["title"] = generated_title or "Percakapan Baru"
 
         return jsonify(response_data)
+        
 
     except Exception as e:
         return jsonify({"error": f"Gagal memproses: {type(e).__name__}", "detail": str(e)}), 500
