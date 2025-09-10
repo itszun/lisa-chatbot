@@ -46,11 +46,9 @@
   <div class="header">Chat Admin API • Session-first</div>
 
   <div class="wrap">
-    <!-- Sidebar: Identity + Sessions -->
     <div class="card">
       <h3>Identitas & Sessions</h3>
       <div class="content">
-        <!-- STEP 1: input + OK -->
         <div id="stepUser">
           <div class="row">
             <input id="user" placeholder="User [id@nama] — contoh: u123@Budi Santoso" />
@@ -64,7 +62,6 @@
           <div class="muted">Masukkan user dengan format id@nama, lalu tekan OK.</div>
         </div>
 
-        <!-- STEP 2: controls sessions (muncul setelah OK) -->
         <div id="stepSessions" style="display:none">
           <div class="row">
             <button id="btnLoad" class="ghost">Load Sessions</button>
@@ -76,10 +73,8 @@
       </div>
     </div>
 
-    <!-- Main: Chat -->
     <div class="card">
       <h3>Chat</h3>
-      <!-- panel ringkasan (hanya untuk sesi lama) -->
       <div id="summary" class="summary-panel"></div>
       <div id="chat" class="chat"></div>
       <div class="composer">
@@ -223,11 +218,15 @@
         const btn = document.createElement("button");
         btn.className = "sess" + (selectedSession === s.session_id ? " active" : "");
         btn.dataset.sid = s.session_id;
+        
+        // --- 🔥 INI PERBAIKANNYA 🔥 ---
+        // Menampilkan s.title (judul) bukan s.session_id
         btn.innerHTML = `
-          <div class="id">${s.session_id}</div>
+          <div class="id">${s.title}</div>
           <div class="meta">Dibuat: ${s.created_at ? new Date(s.created_at).toLocaleString() : "-"}</div>
           <div class="meta">Pesan: ${s.messages_count ?? 0}</div>
         `;
+        
         // klik sesi lama → isNew = false
         btn.onclick = () => activateSession(s.session_id, false);
         sessionsEl.appendChild(btn);
@@ -306,7 +305,7 @@
         const data = await api("/api/sessions", { user: u });
         selectedSession = data.session_id;
         savePrefs();
-        await loadSessions();                         // refresh daftar
+        await loadSessions();                       // refresh daftar
         await activateSession(selectedSession, true); // isNew = true → sapaan saja
         showBanner("Sesi baru dibuat. Session aktif: " + selectedSession, "ok");
       }catch(e){
