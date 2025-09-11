@@ -57,12 +57,24 @@ def prepare_talent_message(talent_name: str, proposed_message: str):
         )
     }
 
+
 def start_chat_with_talent(talent_id: str, talent_name: str, initial_message: str):
+    """
+    Membuat sesi chat baru di MongoDB untuk seorang talent spesifik.
+    Format nama dokumen akan menjadi 'id@nama_dengan_underscore'.
+    """
     try:
         if not _helpers["get_or_create_name_doc"] or not _helpers["append_session"]:
             return {"success": False, "error": "helpers belum diinisialisasi dari app.py"}
 
-        _helpers["get_or_create_name_doc"](name=talent_name, userid=talent_id)
+        # 🔥 INI BAGIAN PENTINGNYA 🔥
+        # 1. Ganti spasi dengan underscore
+        formatted_talent_name = talent_name.replace(" ", "_")
+        # 2. Gabungkan dengan ID untuk membuat kunci dokumen yang unik
+        document_name = f"{formatted_talent_name}"
+
+        # Gunakan nama yang sudah diformat untuk semua interaksi database
+        _helpers["get_or_create_name_doc"](name=document_name, userid=str(talent_id))
 
         new_session_id = str(uuid4())
         created_at = datetime.now(timezone.utc)
@@ -71,12 +83,13 @@ def start_chat_with_talent(talent_id: str, talent_name: str, initial_message: st
             {"role": "assistant", "content": initial_message, "timestamp": created_at.isoformat()},
         ]
 
+        # Gunakan juga nama yang sudah diformat saat menyimpan sesi
         _helpers["append_session"](
-            name=talent_name,
+            name=document_name,
             session_id=new_session_id,
             created_at=created_at,
             messages=messages,
-            title="Percakapan awal"
+            title="Percakapan Awal"
         )
 
         return {
@@ -85,6 +98,7 @@ def start_chat_with_talent(talent_id: str, talent_name: str, initial_message: st
             "session_id": new_session_id
         }
     except Exception as e:
+        print(f"!!! ERROR di dalam TOOL start_chat_with_talent: {e}")
         return {"success": False, "error": str(e)}
 
 # ========== DEFINISI SEMUA TOOLS (LAMA + BARU) ==========
