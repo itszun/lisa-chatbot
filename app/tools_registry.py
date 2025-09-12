@@ -3,6 +3,7 @@ import json
 import requests
 from uuid import uuid4
 from datetime import datetime, timezone
+from typing import Optional
 
 # ===== Helper injection (tanpa import app.py untuk hindari circular) =====
 _helpers = {
@@ -28,6 +29,8 @@ from api_client import (
     list_company_properties, get_company_property_detail, create_company_property, update_company_property, delete_company_property,
     # job-openings
     list_job_openings, get_job_opening_detail, create_job_opening, update_job_opening, delete_job_opening,
+    # PEMBARUAN: Impor fungsi baru
+    get_offer_details,
 )
 
 # URL API Laravel Anda (Ganti dengan URL yang sebenarnya)
@@ -42,21 +45,25 @@ def get_talents():
     except requests.exceptions.RequestException as e:
         return {"error": f"Gagal menghubungi API Laravel: {str(e)}"}
 
-def prepare_talent_message(talent_name: str, proposed_message: str):
+def prepare_talent_message(talent_id: int, talent_name: str, sender_name: str, proposed_message: str):
     """
-    Menyiapkan draf pesan untuk dikirim ke talent dan meminta konfirmasi dari user.
-    Fungsi ini TIDAK mengirim apapun, hanya memformat pertanyaan konfirmasi.
+    Menyiapkan draf pesan untuk dikirim ke talent.
+    Fungsi ini sekarang bisa mengambil detail talent untuk konteks tambahan.
     """
+    talent_details = get_talent_detail(talent_id=talent_id)
+    skills = talent_details.get("skills", [])
+    
     return {
         "status": "waiting_confirmation",
+        "talent_id": talent_id,
         "talent_name": talent_name,
+        "sender_name": sender_name,
         "message_draft": proposed_message,
         "confirmation_question": (
-            f"Baik, saya akan mengirim pesan ke {talent_name}. "
+            f"Baik, saya akan mengirim pesan ke {talent_name} dari {sender_name}. "
             f"Apakah pesan berikut sudah sesuai: '{proposed_message}'? (Ya/Tidak/Ubah)"
         )
     }
-
 
 def start_chat_with_talent(talent_id: str, talent_name: str, initial_message: str):
     """
@@ -67,13 +74,9 @@ def start_chat_with_talent(talent_id: str, talent_name: str, initial_message: st
         if not _helpers["get_or_create_name_doc"] or not _helpers["append_session"]:
             return {"success": False, "error": "helpers belum diinisialisasi dari app.py"}
 
-        # 🔥 INI BAGIAN PENTINGNYA 🔥
-        # 1. Ganti spasi dengan underscore
         formatted_talent_name = talent_name.replace(" ", "_")
-        # 2. Gabungkan dengan ID untuk membuat kunci dokumen yang unik
         document_name = f"{formatted_talent_name}"
 
-        # Gunakan nama yang sudah diformat untuk semua interaksi database
         _helpers["get_or_create_name_doc"](name=document_name, userid=str(talent_id))
 
         new_session_id = str(uuid4())
@@ -83,7 +86,6 @@ def start_chat_with_talent(talent_id: str, talent_name: str, initial_message: st
             {"role": "assistant", "content": initial_message, "timestamp": created_at.isoformat()},
         ]
 
-        # Gunakan juga nama yang sudah diformat saat menyimpan sesi
         _helpers["append_session"](
             name=document_name,
             session_id=new_session_id,
@@ -101,22 +103,85 @@ def start_chat_with_talent(talent_id: str, talent_name: str, initial_message: st
         print(f"!!! ERROR di dalam TOOL start_chat_with_talent: {e}")
         return {"success": False, "error": str(e)}
 
+def list_job_openings_enriched(page: int = 1, per_page: int = 10, search: Optional[str] = None):
+    """
+    Ambil daftar lowongan lalu lengkapi dengan company_name berdasarkan company_id.
+    Selalu mengembalikan struktur { "data": [ ... ], "pagination": ...? } agar konsisten.
+    """
+    try:
+        raw = list_job_openings(page=page, per_page=per_page, search=search)
+    except Exception as e:
+        return {"error": f"Gagal memuat lowongan: {str(e)}"}
+
+    items = []
+    pagination = None
+    if isinstance(raw, dict):
+        items = raw.get("data") or raw.get("items") or raw.get("results") or []
+        pagination = raw.get("pagination")
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        items = []
+
+    cache_name_by_id = {}
+    enriched = []
+    for it in items:
+        company_id = (it.get("company_id")
+                      or (it.get("company") or {}).get("id"))
+        company_name = (it.get("company_name")
+                        or (it.get("company") or {}).get("name"))
+
+        if not company_name and company_id:
+            if company_id in cache_name_by_id:
+                company_name = cache_name_by_id[company_id]
+            else:
+                try:
+                    detail = get_company_detail(company_id=company_id)
+                    company_name = (detail or {}).get("name")
+                except Exception:
+                    company_name = None
+                cache_name_by_id[company_id] = company_name
+
+        if not company_name:
+            company_name = "Tidak diketahui"
+
+        enriched.append({**it, "company_name": company_name})
+
+    return {"data": enriched, "pagination": pagination}
+
 # ========== DEFINISI SEMUA TOOLS (LAMA + BARU) ==========
 tools = [
+    {
+    "type": "function",
+    "function": {
+        "name": "list_job_openings_enriched",
+        "description": "Ambil daftar lowongan dan otomatis lengkapi nama perusahaan berdasarkan company_id.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "page": {"type": "integer", "default": 1},
+                "per_page": {"type": "integer", "default": 10},
+                "search": {"type": "string"}
+            }
+        }
+    }
+    },
     
     # ===== TOOLS BARU INTEGRASI LARAVEL =====
      {
         "type": "function",
         "function": {
             "name": "prepare_talent_message",
-            "description": "Gunakan fungsi ini SEBELUM mengirim pesan ke talent. Fungsi ini menyiapkan draf pesan dan meminta konfirmasi dari pengguna. JANGAN gunakan start_chat_with_talent secara langsung tanpa konfirmasi.",
+            "description": "Gunakan fungsi ini SEBELUM mengirim pesan ke talent untuk menyiapkan draf dan meminta konfirmasi. Anda harus tahu ID dan nama talent, serta dari siapa pesan dikirim.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "talent_id": {"type": "integer", "description": "ID dari talent target."},
                     "talent_name": {"type": "string", "description": "Nama talent target."},
-                    "proposed_message": {"type": "string", "description": "Draf isi pesan yang disarankan oleh AI untuk dikirim."}
+                    "sender_name": {"type": "string", "description": "Nama orang atau perusahaan yang mengirim pesan."},
+                    "proposed_message": {"type": "string", "description": "Draf isi pesan yang disarankan oleh AI untuk dikirim, yang sudah dipersonalisasi."}
                 },
-                "required": ["talent_name", "proposed_message"]
+                "required": ["talent_id", "talent_name", "sender_name", "proposed_message"]
             }
         }
     },
@@ -199,7 +264,10 @@ available_functions = {
     "get_talents": get_talents,
     "prepare_talent_message": prepare_talent_message,
     "start_chat_with_talent": start_chat_with_talent,
-    
+    "list_job_openings_enriched": list_job_openings_enriched,
+
+    # PEMBARUAN: Tambahkan mapping fungsi baru di sini
+    "get_offer_details": get_offer_details,
 
     "list_talent": list_talent,
     "get_talent_detail": get_talent_detail,
