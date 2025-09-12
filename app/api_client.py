@@ -268,7 +268,7 @@ def _get_detail(resource: str, rid: int) -> Dict[str, Any]:
 
 def _create_resource(resource: str, payload: Dict[str, Any]) -> Any:
     url = f"{BASE_URL}/api/{PANEL}/{resource}"
-    r = _post(url, json=payload | {"_method": "POST"})
+    r = _post(url, json=payload) # <-- Tidak ada lagi penambahan _method
     _raise_on_error(r, f"POST create {resource}")
     return _safe_json(r)
 
@@ -286,6 +286,8 @@ def _delete_resource(resource: str, rid: int) -> Any:
     _raise_on_error(r, f"DELETE {resource} id {rid}")
     return {"deleted": True}
 
+# api_client.py
+
 # ===================== RESOURCE: TALENT =====================
 def list_talent(page: int = 1, per_page: int = 10, search: Optional[str] = None):
     return relogin_once_on_401(_list_resource, "talent", page, per_page, search)
@@ -293,8 +295,9 @@ def list_talent(page: int = 1, per_page: int = 10, search: Optional[str] = None)
 def get_talent_detail(talent_id: int):
     return relogin_once_on_401(_get_detail, "talent", talent_id)
 
-def create_talent(name: str, position: str, birthdate: str, summary: str):
-    payload = {"name": name, "position": position, "birthdate": birthdate, "summary": summary}
+def create_talent(name: str, position: str, birthdate: str, summary: str, **kwargs):
+    # PATTERN BARU: Menggunakan **kwargs untuk fleksibilitas
+    payload = {"name": name, "position": position, "birthdate": birthdate, "summary": summary, **kwargs}
     return relogin_once_on_401(_create_resource, "talent", payload)
 
 def update_talent(talent_id: int, name: Optional[str] = None, position: Optional[str] = None,
@@ -316,10 +319,15 @@ def list_candidates(page: int = 1, per_page: int = 10, search: Optional[str] = N
 def get_candidate_detail(candidate_id: int):
     return relogin_once_on_401(_get_detail, "candidates", candidate_id)
 
-def create_candidate(payload: Dict[str, Any]):
+def create_candidate(talent_id: int, job_opening_id: int, **kwargs):
+    payload = {"talent_id": talent_id, "job_opening_id": job_opening_id, **kwargs}
     return relogin_once_on_401(_create_resource, "candidates", payload)
 
-def update_candidate(candidate_id: int, payload: Dict[str, Any]):
+def update_candidate(candidate_id: int, **kwargs):
+    # PATTERN BARU: Hanya mengirim field yang tidak None
+    payload = {k: v for k, v in kwargs.items() if v is not None}
+    if not payload:
+        return {"message": "Tidak ada data untuk diupdate."}
     return relogin_once_on_401(_update_resource, "candidates", candidate_id, payload)
 
 def delete_candidate(candidate_id: int):
@@ -332,10 +340,15 @@ def list_companies(page: int = 1, per_page: int = 10, search: Optional[str] = No
 def get_company_detail(company_id: int):
     return relogin_once_on_401(_get_detail, "companies", company_id)
 
-def create_company(payload: Dict[str, Any]):
+def create_company(name: str, **kwargs):
+    payload = {"name": name, **kwargs}
     return relogin_once_on_401(_create_resource, "companies", payload)
 
-def update_company(company_id: int, payload: Dict[str, Any]):
+def update_company(company_id: int, **kwargs):
+    # PATTERN BARU: Hanya mengirim field yang tidak None
+    payload = {k: v for k, v in kwargs.items() if v is not None}
+    if not payload:
+        return {"message": "Tidak ada data untuk diupdate."}
     return relogin_once_on_401(_update_resource, "companies", company_id, payload)
 
 def delete_company(company_id: int):
@@ -348,10 +361,15 @@ def list_company_properties(page: int = 1, per_page: int = 10, search: Optional[
 def get_company_property_detail(prop_id: int):
     return relogin_once_on_401(_get_detail, "company-properties", prop_id)
 
-def create_company_property(payload: Dict[str, Any]):
+def create_company_property(company_id: int, key: str, value: str):
+    payload = {"company_id": company_id, "key": key, "value": value}
     return relogin_once_on_401(_create_resource, "company-properties", payload)
 
-def update_company_property(prop_id: int, payload: Dict[str, Any]):
+def update_company_property(prop_id: int, **kwargs):
+    # PATTERN BARU: Hanya mengirim field yang tidak None
+    payload = {k: v for k, v in kwargs.items() if v is not None}
+    if not payload:
+        return {"message": "Tidak ada data untuk diupdate."}
     return relogin_once_on_401(_update_resource, "company-properties", prop_id, payload)
 
 def delete_company_property(prop_id: int):
@@ -364,10 +382,18 @@ def list_job_openings(page: int = 1, per_page: int = 10, search: Optional[str] =
 def get_job_opening_detail(opening_id: int):
     return relogin_once_on_401(_get_detail, "job-openings", opening_id)
 
-def create_job_opening(payload: Dict[str, Any]):
+def create_job_opening(company_id: int, title: str, body: Optional[str] = None, status: int = 1, **kwargs):
+    payload = {"company_id": company_id, "title": title}
+    payload["body"] = body if body is not None else ""
+    payload["status"] = status # <-- Menambahkan status default (1 = aktif)
+    payload.update(kwargs)
     return relogin_once_on_401(_create_resource, "job-openings", payload)
 
-def update_job_opening(opening_id: int, payload: Dict[str, Any]):
+def update_job_opening(opening_id: int, **kwargs):
+    # PATTERN BARU: Hanya mengirim field yang tidak None
+    payload = {k: v for k, v in kwargs.items() if v is not None}
+    if not payload:
+        return {"message": "Tidak ada data untuk diupdate."}
     return relogin_once_on_401(_update_resource, "job-openings", opening_id, payload)
 
 def delete_job_opening(opening_id: int):
