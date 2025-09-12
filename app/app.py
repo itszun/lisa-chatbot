@@ -3,6 +3,7 @@
 import os
 import json
 import time
+import traceback
 from uuid import uuid4
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -13,13 +14,12 @@ from flask_cors import CORS
 from openai import OpenAI, RateLimitError
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
-
-from api_client import ensure_token  # pastikan modulmu tersedia
+from api_client import ensure_token, get_talent_detail, get_company_detail
 
 # ======================================================================
 # KONFIGURASI UMUM
 # ======================================================================
-MAX_HISTORY_MESSAGES = 50  # jumlah pesan (di luar system pertama) yang dikirim ke model
+MAX_HISTORY_MESSAGES = 50
 
 load_dotenv()
 
@@ -38,11 +38,8 @@ if not MONGO_URI:
 API_LOG_DIR = os.getenv("API_LOG_DIR", "./logs")
 os.makedirs(API_LOG_DIR, exist_ok=True)
 
-# Sapaan default utk sesi baru
-DEFAULT_GREETING = os.getenv("DEFAULT_GREETING", "Halo! Ada yang bisa saya bantu?")
-
 # ======================================================================
-# KONEKSI MONGODB (Skema: satu dokumen per NAMA)
+# KONEKSI MONGODB
 # ======================================================================
 mongo_client = None
 users_chats = None
@@ -57,8 +54,9 @@ except Exception as e:
     mongo_client = None
 
 # ======================================================================
-# PEMBARUAN: SYSTEM PROMPT DEFAULT DENGAN LOGIKA INTERAKTIF
+# SYSTEM PROMPT FINAL
 # ======================================================================
+
 DEFAULT_SYSTEM_PROMPT = (
     "Anda adalah asisten rekruter (recruiter assistant) profesional. Nama Anda Lisa. "
     "Tugas Anda adalah membantu pengguna mengelola data talent, kandidat, dan perusahaan. "
@@ -66,66 +64,53 @@ DEFAULT_SYSTEM_PROMPT = (
     "Selalu balas dalam Bahasa Indonesia yang sopan dan profesional."
     "Saat menampilkan daftar (seperti daftar talent), selalu gunakan format daftar bernomor (1., 2., 3., dst) dengan setiap item di baris baru agar rapi dan mudah dibaca."
 
-    # --- SOP LAMA UNTUK PENDEKATAN TALENT (TIDAK DIUBAH) ---
+    # SOP untuk MENCARI LOWONGAN
+    "SOP (Standard Operating Procedure) SAAT MENCARI LOWONGAN PERUSAHAAN SPESIFIK: "
+    "Ketika pengguna bertanya apakah sebuah perusahaan spesifik membuka lowongan, tugas Anda adalah sebagai berikut: "
+    "LANGKAH 1: LANGSUNG gunakan tool `list_job_openings_enriched` dengan nama perusahaan sebagai parameter `search`. "
+    "LANGKAH 2: JANGAN mencari ID perusahaan terlebih dahulu. "
+    "LANGKAH 3: Jika hasilnya kosong, informasikan bahwa tidak ditemukan lowongan untuk perusahaan tersebut. "
+
+    # SOP untuk MENGHUBUNGI TALENT
     "SOP (Standard Operating Procedure) SAAT MENGHUBUNGI TALENT: "
     "Saat pengguna meminta untuk mengirim pesan ke seorang talent dari sebuah perusahaan, IKUTI LANGKAH-LANGKAH BERIKUT SECARA BERURUTAN: "
-    
-    "LANGKAH 1: IDENTIFIKASI INFORMASI. Pastikan Anda tahu tiga hal: NAMA TALENT, ID TALENT, dan NAMA PERUSAHAAN PENGIRIM. Jika nama perusahaan tidak disebutkan, tanyakan kembali. "
-    "LANGKAH 2: CARI LOWONGAN RELEVAN. Gunakan tool `list_job_openings` untuk mencari lowongan pekerjaan yang sedang dibuka oleh perusahaan pengirim. Anda mungkin perlu ID perusahaan untuk ini. "
-    "LANGKAH 3: CARI KEAHLIAN TALENT. Gunakan tool `get_talent_detail` untuk melihat profil lengkap dan daftar keahlian (skills) dari talent yang akan dihubungi. "
-    "LANGKAH 4: ANALISIS & BUAT DRAF. Bandingkan keahlian talent (dari Langkah 3) dengan daftar lowongan (dari Langkah 2). "
-    "  - JIKA ADA KECOCOKAN (misal: talent bisa 'Django', dan ada lowongan 'Fullstack Developer'), buat draf pesan yang SANGAT SPESIFIK. Sebutkan nama posisi yang relevan. "
-    "  - JIKA TIDAK ADA KECOCOKAN, buat draf pesan yang lebih umum namun tetap profesional, menonjolkan salah satu keahlian terbaik talent. "
-    "LANGKAH 5: MINTA KONFIRMASI. Setelah draf pesan siap, panggil tool `prepare_talent_message` untuk meminta konfirmasi dari pengguna. "
-    "LANGKAH 6: EKSEKUSI. HANYA JIKA pengguna menjawab 'Ya', panggil tool `start_chat_with_talent` untuk menyimpan percakapan. "
-    # --- Batas SOP lama ---
+    "LANGKAH 1: IDENTIFIKASI INFORMASI (NAMA TALENT, ID TALENT, NAMA PERUSAHAAN PENGIRIM). "
+    "LANGKAH 2: CARI LOWONGAN RELEVAN menggunakan `list_job_openings_enriched`. Sangat penting untuk mendapatkan `job_opening_id` dari langkah ini. Jika ada beberapa pilihan, tanyakan kepada pengguna mana yang akan digunakan. "
+    "LANGKAH 3: CARI KEAHLIAN TALENT menggunakan `get_talent_detail`. "
+    "LANGKAH 4: ANALISIS & BUAT DRAF PESAN yang spesifik merujuk pada lowongan yang ditemukan di Langkah 2. "
+    "LANGKAH 5: MINTA KONFIRMASI pengguna menggunakan `prepare_talent_message`. "
+    "LANGKAH 6: TUNGGU PERSETUJUAN (misal: 'Ya' atau 'Kirim'). "
+    "LANGKAH 7: EKSEKUSI. Setelah disetujui, gunakan tool `initiate_contact`. **SEBELUM MEMANGGIL TOOL INI, WAJIB PASTIKAN ANDA SUDAH MEMILIKI `job_opening_id` DARI LANGKAH 2.** Jika Anda belum memilikinya, Anda harus menjalankan Langkah 2 terlebih dahulu. Sertakan `talent_id`, `talent_name`, `job_opening_id`, dan `initial_message` dalam panggilan tool."
 
-    # --- SOP BARU YANG DISEMPURNAKAN UNTUK JOB OFFER ---
+    # SOP untuk JOB OFFER
     "SOP (Standard Operating Procedure) SAAT MENGIRIM PENAWARAN KERJA (JOB OFFER): "
-    "Saat pengguna meminta untuk 'mengirim penawaran', 'memberikan offering letter', atau sejenisnya kepada seorang kandidat, IKUTI LANGKAH-LANGKAH BERIKUT SECARA BERURUTAN: "
-
-    "LANGKAH 1: IDENTIFIKASI KANDIDAT. Pastikan Anda tahu siapa kandidat yang dituju. Minta ID kandidat jika perlu. "
-
-    "LANGKAH 2: KUMPULKAN DETAIL TAWARAN (METODE FLEKSIBEL). "
-    "  2a. PERTAMA, coba gunakan tool `get_offer_details` dengan ID kandidat untuk mendapatkan semua informasi secara otomatis. "
-    "  2b. JIKA GAGAL atau tool tidak menemukan data, TUGAS ANDA ADALAH BERTANYA KEPADA PENGGUNA untuk mendapatkan informasi yang kurang. Tanyakan satu per satu dengan sopan detail berikut: "
-    "    - Jumlah Gaji per bulan (misal: 15.000.000)"
-    "    - Tunjangan yang diberikan (misal: Asuransi kesehatan, bonus)"
-    "    - Waktu kerja (misal: Senin-Jumat, 09.00-17.00)"
-    "    - Benefit lainnya (misal: Cuti 14 hari, program pelatihan)"
-    "    - Nama pengirim surat (misal: Rina, Tim HR)"
-    "    - Kontak yang bisa dihubungi (misal: rina@perusahaan.com atau 081234567)"
-
-    "LANGKAH 3: BUAT DRAF SURAT TAWARAN. Setelah SEMUA informasi terkumpul (baik dari tool maupun dari jawaban pengguna), buat draf pesan HANYA menggunakan template berikut. Isi semua bagian yang ada di dalam kurung siku `[...]` dengan data yang sudah Anda kumpulkan. Jangan mengubah format template. "
+    "Saat pengguna meminta untuk 'mengirim penawaran' atau 'memberikan offering letter', IKUTI LANGKAH-LANGKAH BERIKUT: "
+    "LANGKAH 1: IDENTIFIKASI KANDIDAT. "
+    "LANGKAH 2: KUMPULKAN DETAIL TAWARAN (coba `get_offer_details` dulu, jika gagal tanyakan pengguna). "
+    "LANGKAH 3: BUAT DRAF SURAT TAWARAN menggunakan template yang sudah disediakan. "
     "--- TEMPLATE SURAT TAWARAN ---"
     "Selamat pagi, Pak/Bu [Nama Kandidat],\n\n"
     "Terima kasih banyak atas waktu yang telah Anda luangkan untuk wawancara di [Nama Perusahaan] beberapa hari lalu. Kami sangat terkesan dengan pengalaman dan keterampilan Anda yang relevan dengan posisi [Nama Posisi] yang kami tawarkan.\n\n"
     "Setelah melalui proses evaluasi yang seksama, kami senang untuk menawarkan Anda posisi [Nama Posisi] di [Nama Perusahaan]. Berikut adalah detail terkait tawaran kami:\n\n"
     "- Gaji: Rp [Jumlah Gaji] per bulan\n"
-    "- Tunjangan: [Sebutkan tunjangan yang diberikan, seperti asuransi kesehatan, bonus, dll.]\n"
-    "- Waktu kerja: [Jadwal kerja, misalnya Senin-Jumat, 08.00-17.00]\n"
-    "- Benefit lainnya: [Sebutkan benefit lain seperti pelatihan, cuti, dll.]\n\n"
-    "Kami percaya bahwa Anda akan menjadi aset berharga bagi tim kami dan kami sangat berharap Anda dapat bergabung dengan kami. Silakan konfirmasi jika Anda menerima tawaran ini dengan mengirimkan tanda tangan Anda pada email ini sebagai bukti persetujuan.\n\n"
-    "Terima kasih sekali lagi atas perhatian Anda, dan kami menantikan jawaban Anda segera.\n\n"
-    "Saya tunggu kabar baik dari Anda.\n\n"
+    "- Tunjangan: [Sebutkan tunjangan yang diberikan]\n"
+    "- Waktu kerja: [Jadwal kerja, misalnya Senin-Jumat, 09.00-17.00]\n"
+    "- Benefit lainnya: [Sebutkan benefit lain seperti cuti, dll.]\n\n"
+    "Kami percaya bahwa Anda akan menjadi aset berharga bagi tim kami dan kami sangat berharap Anda dapat bergabung dengan kami. Silakan konfirmasi jika Anda menerima tawaran ini.\n\n"
+    "Terima kasih sekali lagi atas perhatian Anda.\n\n"
     "Salam,\n"
-    "[Nama Anda]\n"
-    "HR [Nama Perusahaan]\n"
+    "[Nama Pengirim]\n"
+    "Tim HR [Nama Perusahaan]\n"
     "[Kontak yang bisa dihubungi]"
     "--- AKHIR TEMPLATE ---"
+    "LANGKAH 4: MINTA KONFIRMASI pengguna menggunakan `prepare_talent_message`. "
+    "LANGKAH 5: EKSEKUSI. Setelah pengguna setuju, **gunakan tool `initiate_contact`** untuk mendaftarkan kandidat dan 'mengirim' surat."
 
-    "LANGKAH 4: MINTA KONFIRMASI. Setelah draf lengkap, panggil tool `prepare_talent_message` untuk meminta konfirmasi dari pengguna. Di parameter `proposed_message`, masukkan seluruh isi draf surat tawaran. Tanya kepada pengguna: 'Berikut adalah draf surat penawaran untuk [Nama Kandidat]. Apakah sudah sesuai dan siap untuk dikirim?'"
-
-    "LANGKAH 5: EKSEKUSI. HANYA JIKA pengguna menjawab 'Ya', panggil tool `start_chat_with_talent` untuk menyimpan dan 'mengirim' surat penawaran tersebut. "
-    # --- Batas SOP baru ---
-
-    "PENTING: Ketika Anda menerima hasil dari sebuah pemanggilan tool (function call), JANGAN PERNAH menampilkan data mentah JSON kepada pengguna. "
-    "Tugas Anda adalah menginterpretasikan data tersebut dan menyajikannya dalam format yang mudah dibaca, seperti kalimat lengkap atau ringkasan. "
-    "Saat menjelaskan sesuatu, JANGAN GUNAKAN FORMAT MARKDOWN seperti bintang (**) untuk bold atau tanda hubung (-) untuk daftar. "
-    "Gunakan kalimat lengkap dalam bentuk paragraf atau daftar bernomor (1., 2., 3.) jika diperlukan untuk membuat penjelasan yang rapi dan mudah dibaca."
-    "Ketika menampilkan daftar lowongan, SELALU gunakan tool `list_job_openings_enriched` agar setiap item memiliki `company_name`. "
-    "Jangan tampilkan teks 'Perusahaan: Tidak disebutkan'. Jika lookup gagal, tampilkan 'Perusahaan: Tidak diketahui'. "
-)
+    # ATURAN PENTING LAINNYA
+    "ATURAN PENTING: "
+    "1. JANGAN PERNAH menampilkan data mentah JSON. Selalu interpretasikan dan sajikan dalam kalimat yang mudah dibaca. "
+    "2. JANGAN GUNAKAN FORMAT MARKDOWN. Gunakan kalimat lengkap atau daftar bernomor. "
+    )
 
 # ======================================================================
 # UTILITAS
@@ -139,6 +124,23 @@ def parse_user(user_field: str) -> Tuple[str, str]:
     if not userid or not name:
         raise ValueError("userid atau nama tidak boleh kosong.")
     return userid, name
+
+def validate_user_identity(userid: str, name: str) -> Tuple[Optional[str], Optional[Dict]]:
+    try:
+        talent_id = int(userid)
+        talent_data = get_talent_detail(talent_id=talent_id)
+        if talent_data and (talent_data.get("name") or "").lower() == name.lower():
+            return "talent", talent_data
+    except (ValueError, RuntimeError, PermissionError):
+        pass
+    try:
+        company_id = int(userid)
+        company_data = get_company_detail(company_id=company_id)
+        if company_data and (company_data.get("name") or "").lower() == name.lower():
+            return "company", company_data
+    except (ValueError, RuntimeError, PermissionError):
+        pass
+    return None, None
 
 def get_or_create_name_doc(name: str, userid: Optional[str] = None) -> dict:
     doc = users_chats.find_one({"name": name})
@@ -170,7 +172,6 @@ def update_session_title(name: str, session_id: str, new_title: str) -> None:
     )
 
 def append_session(name: str, session_id: str, created_at: datetime, messages: List[dict], title: str) -> None:
-    """Simpan sesi baru (created_at wajib timezone-aware UTC)."""
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
     users_chats.update_one(
@@ -183,28 +184,16 @@ def append_session(name: str, session_id: str, created_at: datetime, messages: L
         }}}
     )
 
-def create_session_with_initial_message(name: str, system_prompt: str, initial_message: str) -> Tuple[str, datetime]:
-    sid = str(uuid4())
-    created_at = datetime.now(timezone.utc)
-    messages = [
-        {"role": "system", "content": system_prompt, "timestamp": created_at.isoformat()},
-        {"role": "assistant", "content": initial_message, "timestamp": created_at.isoformat()},
-    ]
-    append_session(name=name, session_id=sid, created_at=created_at, messages=messages, title="Percakapan Awal")
-    return sid, created_at
-
 def _log_tool_call(userid: str, name: str, session_id: str, function_name: str, args: dict, result: Any):
     try:
-        now = datetime.now()  # lokal time untuk nama file
+        now = datetime.now()
         timestamp_safe = now.strftime("%Y-%m-%d_%H-%M-%S")
         short_sid = session_id[:8]
         log_filename = f"{timestamp_safe}__{function_name}_{short_sid}.log"
         log_path = os.path.join(API_LOG_DIR, log_filename)
-
         args_str = json.dumps(args, ensure_ascii=False)
         result_str = json.dumps(result, ensure_ascii=False, indent=2)
         header_line = f"[{now.strftime('%Y/%m/%d %H:%M:%S')}] [UserID: {userid}, Name: {name}, Session: {session_id}]"
-
         log_entry = (
             f"{header_line}\n"
             f"Fungsi yang dipanggil: {function_name}({args_str})\n"
@@ -233,7 +222,7 @@ def _extract_bearer_token(req) -> str:
     return ""
 
 # ======================================================================
-# IMPORT TOOLS + INJEKSI HELPER (hilangkan circular import)
+# IMPORT TOOLS + INJEKSI HELPER
 # ======================================================================
 from tools_registry import tools as TOOLS_SPEC, available_functions as AVAILABLE_FUNCS, set_helpers
 set_helpers(get_or_create_name_doc, append_session, DEFAULT_SYSTEM_PROMPT)
@@ -245,7 +234,6 @@ set_helpers(get_or_create_name_doc, append_session, DEFAULT_SYSTEM_PROMPT)
 def index():
     return render_template("index.html")
 
-# ---------- SESSION DISCOVERY ----------
 @app.route("/api/sessions", methods=["GET"])
 def list_sessions():
     try:
@@ -253,18 +241,17 @@ def list_sessions():
         ensure_token(preferred_token=incoming_token if incoming_token else None)
     except Exception as e:
         return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
-
     user_field = (request.args.get("user") or "").strip()
     try:
         userid, name = parse_user(user_field)
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
-
+    user_type, _ = validate_user_identity(userid, name)
+    if not user_type:
+        return jsonify({"error": "AKSES DITOLAK: Pengguna tidak terdaftar di database."}), 404
     if not mongo_client:
         return jsonify({"error": "MongoDB tidak tersedia"}), 500
-
     doc = get_or_create_name_doc(name=name, userid=userid)
-
     sessions = []
     for s in doc.get("sessions", []):
         created = s.get("created_at")
@@ -275,7 +262,6 @@ def list_sessions():
             "created_at": created_str,
             "messages_count": len(s.get("messages") or [])
         })
-
     sessions.sort(key=lambda x: x.get("created_at") or "", reverse=True)
     return jsonify({"name": name, "sessions": sessions})
 
@@ -287,29 +273,26 @@ def create_session():
         ensure_token(preferred_token=incoming_token if incoming_token else None)
     except Exception as e:
         return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
-
     user_field = (data.get("user") or "").strip()
     system_prompt = data.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
-
     try:
         userid, name = parse_user(user_field)
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
-
+    user_type, _ = validate_user_identity(userid, name)
+    if not user_type:
+        return jsonify({"error": "AKSES DITOLAK: Pengguna tidak terdaftar di database."}), 404
+    personalized_greeting = f"Hai {user_type.capitalize()} {name}, adakah yang bisa saya bantu?"
     if not mongo_client:
         return jsonify({"error": "MongoDB tidak tersedia"}), 500
-
     _ = get_or_create_name_doc(name=name, userid=userid)
-
     new_sid = str(uuid4())
     created_at = datetime.now(timezone.utc)
     default_title = "Percakapan Baru"
-
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "assistant", "content": DEFAULT_GREETING},
+        {"role": "assistant", "content": personalized_greeting},
     ]
-
     append_session(
         name=name,
         session_id=new_sid,
@@ -317,7 +300,6 @@ def create_session():
         messages=messages,
         title=default_title
     )
-
     return jsonify({
         "name": name,
         "session_id": new_sid,
@@ -325,76 +307,34 @@ def create_session():
         "created_at": created_at.isoformat()
     })
 
-# ---------- CHAT ----------
 @app.route("/api/chat", methods=["POST"])
 def chat():
     data = request.get_json(force=True)
-
     try:
         incoming_token = _extract_bearer_token(request)
         ensure_token(preferred_token=incoming_token if incoming_token else None)
     except Exception as e:
         return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
-
     user_field = (data.get("user") or "").strip()
     user_msg = (data.get("message") or "").strip()
     session_id = data.get("session_id")
 
-    if not user_field:
-        return jsonify({"error": "Field 'user' wajib diisi dengan format 'userid@nama'."}), 400
-    if not user_msg:
-        return jsonify({"error": "Pesan kosong."}), 400
-
+    if not user_field or not user_msg or not session_id:
+        return jsonify({"error": "Input tidak lengkap (membutuhkan user, message, session_id)."}), 400
     try:
         userid, name = parse_user(user_field)
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
-
     if not mongo_client:
         return jsonify({"error": "MongoDB tidak tersedia"}), 500
-
-    is_new_session = not session_id
-    messages_full: List[dict] = []
-
-    if is_new_session:
-        session_id = str(uuid4())
-        get_or_create_name_doc(name=name, userid=userid)
-        now_iso = datetime.now(timezone.utc).isoformat()
-        messages_full = [
-            {"role": "system", "content": DEFAULT_SYSTEM_PROMPT, "timestamp": now_iso},
-            {"role": "user", "content": user_msg, "timestamp": now_iso}
-        ]
-    else:
-        doc = users_chats.find_one({"name": name})
-        if not doc:
-            return jsonify({"error": f"Nama '{name}' belum terdaftar."}), 404
-        sess = find_session(doc, session_id)
-        if not sess:
-            return jsonify({"error": f"session_id '{session_id}' tidak ditemukan untuk nama '{name}'."}), 404
-
-        messages_full = sess.get("messages", [])
-        messages_full.append({"role": "user", "content": user_msg, "timestamp": datetime.now(timezone.utc).isoformat()})
-
-    user_message_count = sum(1 for m in messages_full if m.get("role") == "user")
-    if user_message_count == 1 and user_msg:
-        try:
-            title_prompt = (
-                "Anda adalah AI yang ahli membuat judul singkat. "
-                "Berdasarkan pesan pertama dari pengguna ini, buatlah sebuah judul percakapan yang ringkas, jelas, dan relevan. "
-                "Judul harus maksimal 5 kata. Jangan tambahkan tanda kutip atau kata 'Judul:'. "
-                f"Pesan pengguna: '{user_msg}'"
-            )
-            title_comp = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": title_prompt}],
-                temperature=0.2, max_tokens=20
-            )
-            generated_title = (title_comp.choices[0].message.content or "").strip().replace('"', '') or "Percakapan"
-        except Exception as title_e:
-            generated_title = "Percakapan Baru"
-            print(f"!! Gagal membuat judul untuk sesi {session_id}: {title_e}")
-    else:
-        generated_title = None
+    doc = users_chats.find_one({"name": name})
+    if not doc:
+        return jsonify({"error": f"Nama '{name}' belum terdaftar."}), 404
+    sess = find_session(doc, session_id)
+    if not sess:
+        return jsonify({"error": f"session_id '{session_id}' tidak ditemukan untuk nama '{name}'."}), 404
+    messages_full = sess.get("messages", [])
+    messages_full.append({"role": "user", "content": user_msg, "timestamp": datetime.now(timezone.utc).isoformat()})
 
     def _ctx_slice(msgs: List[dict]) -> List[dict]:
         if len(msgs) > MAX_HISTORY_MESSAGES:
@@ -403,11 +343,7 @@ def chat():
 
     tool_runs = []
     final_text = ""
-
-    max_retries = 3
-    base_delay = 5  # detik
-
-    for attempt in range(max_retries):
+    for attempt in range(3):
         try:
             ctx_messages = _ctx_slice(messages_full)
             first = client.chat.completions.create(
@@ -418,29 +354,15 @@ def chat():
                 temperature=0.2
             )
             resp_msg = first.choices[0].message
-            tool_calls = getattr(resp_msg, "tool_calls", None)
+            message_dict = resp_msg.model_dump()
+            messages_full.append(message_dict)
+            tool_calls = resp_msg.tool_calls
 
             if tool_calls:
-                messages_full.append({
-                    "role": "assistant",
-                    "content": resp_msg.content or None,
-                    "tool_calls": [
-                        {
-                            "id": tc.id, "type": tc.type,
-                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                        }
-                        for tc in tool_calls
-                    ],
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                })
-
                 for tc in tool_calls:
                     fname = tc.function.name
                     try:
                         fargs = json.loads(tc.function.arguments or "{}")
-                    except Exception:
-                        fargs = {}
-                    try:
                         out = AVAILABLE_FUNCS[fname](**fargs)
                         _log_tool_call(userid, name, session_id, fname, fargs, out)
                         result_json = json.dumps(out, ensure_ascii=False)
@@ -454,9 +376,8 @@ def chat():
                         "tool_call_id": tc.id,
                         "name": fname,
                         "content": result_json,
-                        "timestamp": datetime.now(timezone.utc).isoformat()
                     })
-
+                
                 ctx_messages_2 = _ctx_slice(messages_full)
                 second = client.chat.completions.create(
                     model="gpt-4o",
@@ -466,198 +387,25 @@ def chat():
                 final_text = second.choices[0].message.content or ""
             else:
                 final_text = resp_msg.content or ""
-            
-            break # Jika berhasil, keluar dari loop
-
+            break
         except RateLimitError as e:
-            print(f"!! Rate limit terlampaui. Percobaan ke-{attempt + 1}. Menunggu {base_delay} detik...")
-            if attempt + 1 == max_retries:
-                return jsonify({"error": "Server sedang sibuk karena batas API tercapai. Silakan coba lagi dalam beberapa saat.", "detail": str(e)}), 429
-            time.sleep(base_delay)
-            base_delay *= 2
-        
+            if attempt + 1 == 3: return jsonify({"error": "Server sibuk, coba lagi nanti.", "detail": str(e)}), 429
+            time.sleep(5)
         except Exception as e:
+            print("\n\n--- TRACEBACK ERROR ---")
+            traceback.print_exc()
+            print("--- END TRACEBACK ---\n\n")
             return jsonify({"error": f"Gagal memproses: {type(e).__name__}", "detail": str(e)}), 500
 
-    messages_full.append({
-        "role": "assistant",
-        "content": final_text,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    })
-
-    if is_new_session:
-        append_session(
-            name=name,
-            session_id=session_id,
-            created_at=datetime.now(timezone.utc),
-            messages=messages_full,
-            title=generated_title or "Percakapan Baru"
-        )
-    else:
-        upsert_session_messages(name=name, session_id=session_id, messages=messages_full)
-        if generated_title:
-            update_session_title(name, session_id, generated_title)
-
-    response_data = {
+    messages_full.append({"role": "assistant", "content": final_text, "timestamp": datetime.now(timezone.utc).isoformat()})
+    upsert_session_messages(name=name, session_id=session_id, messages=messages_full)
+    return jsonify({
         "name": name,
         "session_id": session_id,
         "answer": final_text,
         "tool_runs": tool_runs
-    }
-    if is_new_session:
-        response_data["new_session_id"] = session_id
-        response_data["title"] = generated_title or "Percakapan Baru"
-
-    return jsonify(response_data)
-
-
-# ---------- NOTIFY INVITE ----------
-@app.route("/api/notify/invite", methods=["POST"])
-def notify_invite():
-    try:
-        incoming_token = _extract_bearer_token(request)
-        ensure_token(preferred_token=incoming_token if incoming_token else None)
-    except Exception as e:
-        return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
-
-    data = request.get_json(force=True)
-    sender_field = (data.get("sender") or "").strip()
-    target_field = (data.get("target") or "").strip()
-    custom_msg = (data.get("message") or "").strip()
-    sys_prompt = data.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
-
-    if not sender_field or "@" not in sender_field:
-        return jsonify({"error": "Field 'sender' wajib format 'userid@Nama Perusahaan'."}), 400
-    if not target_field or "@" not in target_field:
-        return jsonify({"error": "Field 'target' wajib format 'userid@Nama Talent'."}), 400
-
-    try:
-        sender_userid, sender_name = parse_user(sender_field)
-        target_userid, target_name = parse_user(target_field)
-    except ValueError as ve:
-        return jsonify({"error": str(ve)}), 400
-
-    if not mongo_client:
-        return jsonify({"error": "MongoDB tidak tersedia"}), 500
-
-    target_before = users_chats.find_one({"name": target_name})
-    get_or_create_name_doc(name=target_name, userid=target_userid)
-
-    default_text = f"PT {sender_name} mengundang Anda untuk mengikuti seleksi. Silakan konfirmasi kehadiran atau ajukan pertanyaan di sini."
-    invite_text = custom_msg or default_text
-
-    sid, created_at = create_session_with_initial_message(
-        name=target_name,
-        system_prompt=sys_prompt,
-        initial_message=invite_text
-    )
-
-    return jsonify({
-        "ok": True,
-        "target_name": target_name,
-        "created_new_user": target_before is None,
-        "session_id": sid,
-        "created_at": created_at.isoformat(),
-        "message": invite_text
-    }), 201
-
-# ---------- SESSION SUMMARY ----------
-@app.route("/api/session/summary", methods=["GET"])
-def session_summary():
-    try:
-        incoming_token = _extract_bearer_token(request)
-        ensure_token(preferred_token=incoming_token if incoming_token else None)
-    except Exception as e:
-        return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
-
-    user_field = (request.args.get("user") or "").strip()
-    session_id = (request.args.get("session_id") or "").strip()
-    max_words = (request.args.get("max_words") or "40").strip()
-    try:
-        max_words = max(10, min(80, int(max_words)))
-    except Exception:
-        max_words = 40
-
-    if not user_field or "@" not in user_field:
-        return jsonify({"error": "Param 'user' wajib format id@nama"}), 400
-    if not session_id:
-        return jsonify({"error": "Param 'session_id' wajib diisi"}), 400
-
-    try:
-        userid, name = parse_user(user_field)
-    except ValueError as ve:
-        return jsonify({"error": str(ve)}), 400
-
-    if not mongo_client:
-        return jsonify({"error": "MongoDB tidak tersedia"}), 500
-
-    doc = users_chats.find_one({"name": name})
-    if not doc:
-        return jsonify({"error": f"Nama '{name}' belum terdaftar"}), 404
-
-    sess = find_session(doc, session_id)
-    if not sess:
-        return jsonify({"error": f"session_id '{session_id}' tidak ditemukan untuk '{name}'"}), 404
-
-    msgs = sess.get("messages", []) or []
-    if len(msgs) > 81:
-        msgs = [msgs[0]] + msgs[-80:]
-
-    non_system = [m for m in msgs if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()]
-    just_greeting = (len(non_system) == 1 and non_system[0].get("role") == "assistant")
-
-    if just_greeting:
-        return jsonify({
-            "name": name,
-            "session_id": session_id,
-            "summary": "",
-            "kind": "summary_preview",
-            "skip": True,
-            "reason": "just_greeting"
-        })
-
-    summarize_system = (
-        "Ringkas percakapan berikut dengan SANGAT SINGKAT untuk log internal. "
-        "Output wajib 5 kalimat saja, maksimum {MAX_WORDS} kata total. "
-        "Fokus pada: topik utama yang sedang dibahas dan keputusan/aksi berikutnya (jika ada). "
-        "JANGAN pakai bullet/nomor, JANGAN menyalin daftar panjang, "
-        "JANGAN mencantumkan ID/tanggal/angka serial yang tidak penting. "
-        "Jangan tulis kata 'Ringkasan:' atau sapaan; langsung isi. "
-    ).replace("{MAX_WORDS}", str(max_words))
-
-    summary_messages = [{"role": "system", "content": summarize_system}]
-    for m in msgs:
-        r = m.get("role")
-        if r in ("user", "assistant"):
-            c = (m.get("content") or "").strip()
-            if c:
-                summary_messages.append({"role": r, "content": c})
-
-    def _limit_words(text: str, limit: int) -> str:
-        words = text.split()
-        return " ".join(words[:limit]) + ("" if len(words) <= limit else "…")
-
-    try:
-        comp = client.chat.completions.create(
-            model="gpt-4o",
-            messages=summary_messages,
-            temperature=0.1,
-            max_tokens=160,
-        )
-        summary_text = (comp.choices[0].message.content or "").strip()
-        summary_text = _limit_words(summary_text, max_words)
-    except Exception as e:
-        return jsonify({"error": f"Gagal merangkum: {type(e).__name__}", "detail": str(e)}), 500
-
-    return jsonify({
-        "name": name,
-        "session_id": session_id,
-        "summary": summary_text,
-        "kind": "summary_preview",
-        "skip": False
     })
 
-# ---------- SESSION MESSAGES ----------
 @app.get("/api/session/messages")
 def get_session_messages():
     try:
@@ -665,33 +413,25 @@ def get_session_messages():
         ensure_token(preferred_token=incoming_token if incoming_token else None)
     except Exception as e:
         return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
-
     user_field = (request.args.get("user") or "").strip()
     session_id = (request.args.get("session_id") or "").strip()
-    if not user_field or "@" not in user_field:
-        return jsonify({"error": "Param 'user' wajib format id@nama"}), 400
-    if not session_id:
-        return jsonify({"error": "Param 'session_id' wajib diisi"}), 400
-
+    if not user_field or not session_id:
+        return jsonify({"error": "Parameter 'user' dan 'session_id' wajib diisi."}), 400
     try:
         userid, name = parse_user(user_field)
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
-
     if not mongo_client:
         return jsonify({"error": "MongoDB tidak tersedia"}), 500
-
     doc = users_chats.find_one({"name": name})
     if not doc:
-        return jsonify({"error": f"Nama '{name}' belum terdaftar"}), 404
-
+        return jsonify({"error": f"Nama '{name}' belum terdaftar."}), 404
     sess = find_session(doc, session_id)
     if not sess:
-        return jsonify({"error": f"session_id '{session_id}' tidak ditemukan untuk '{name}'"}), 404
-
+        return jsonify({"error": f"session_id '{session_id}' tidak ditemukan untuk nama '{name}'."}), 404
     msgs = sess.get("messages", []) or []
     return jsonify({
-        "name": name,
+        "name": doc.get("name", name),
         "session_id": session_id,
         "messages": msgs
     })
@@ -702,5 +442,4 @@ def get_session_messages():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     host = os.environ.get("HOST", "127.0.0.1")
-    # Di Windows, reloader bawaan kadang memicu WinError 10038 saat restart.
     app.run(host=host, port=port, debug=True, use_reloader=False, threaded=True)
