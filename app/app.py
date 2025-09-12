@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 import os
 import json
+import time
 from uuid import uuid4
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -9,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 
@@ -56,27 +57,74 @@ except Exception as e:
     mongo_client = None
 
 # ======================================================================
-# SYSTEM PROMPT DEFAULT
+# PEMBARUAN: SYSTEM PROMPT DEFAULT DENGAN LOGIKA INTERAKTIF
 # ======================================================================
 DEFAULT_SYSTEM_PROMPT = (
-    "Anda adalah asisten yang membantu untuk sebuah Admin API. "
+    "Anda adalah asisten rekruter (recruiter assistant) profesional. Nama Anda Lisa. "
+    "Tugas Anda adalah membantu pengguna mengelola data talent, kandidat, dan perusahaan. "
     "Gunakan tools yang tersedia untuk melakukan operasi CRUD. "
-    "Berikan jawaban yang ringkas, hanya tampilkan field-field kunci. "
-    "Jika sebuah operasi gagal, berikan pesan error yang singkat dan jelas. "
-    "Selalu balas dalam Bahasa Indonesia. "
+    "Selalu balas dalam Bahasa Indonesia yang sopan dan profesional."
+    "Saat menampilkan daftar (seperti daftar talent), selalu gunakan format daftar bernomor (1., 2., 3., dst) dengan setiap item di baris baru agar rapi dan mudah dibaca."
+
+    # --- SOP LAMA UNTUK PENDEKATAN TALENT (TIDAK DIUBAH) ---
+    "SOP (Standard Operating Procedure) SAAT MENGHUBUNGI TALENT: "
+    "Saat pengguna meminta untuk mengirim pesan ke seorang talent dari sebuah perusahaan, IKUTI LANGKAH-LANGKAH BERIKUT SECARA BERURUTAN: "
+    
+    "LANGKAH 1: IDENTIFIKASI INFORMASI. Pastikan Anda tahu tiga hal: NAMA TALENT, ID TALENT, dan NAMA PERUSAHAAN PENGIRIM. Jika nama perusahaan tidak disebutkan, tanyakan kembali. "
+    "LANGKAH 2: CARI LOWONGAN RELEVAN. Gunakan tool `list_job_openings` untuk mencari lowongan pekerjaan yang sedang dibuka oleh perusahaan pengirim. Anda mungkin perlu ID perusahaan untuk ini. "
+    "LANGKAH 3: CARI KEAHLIAN TALENT. Gunakan tool `get_talent_detail` untuk melihat profil lengkap dan daftar keahlian (skills) dari talent yang akan dihubungi. "
+    "LANGKAH 4: ANALISIS & BUAT DRAF. Bandingkan keahlian talent (dari Langkah 3) dengan daftar lowongan (dari Langkah 2). "
+    "  - JIKA ADA KECOCOKAN (misal: talent bisa 'Django', dan ada lowongan 'Fullstack Developer'), buat draf pesan yang SANGAT SPESIFIK. Sebutkan nama posisi yang relevan. "
+    "  - JIKA TIDAK ADA KECOCOKAN, buat draf pesan yang lebih umum namun tetap profesional, menonjolkan salah satu keahlian terbaik talent. "
+    "LANGKAH 5: MINTA KONFIRMASI. Setelah draf pesan siap, panggil tool `prepare_talent_message` untuk meminta konfirmasi dari pengguna. "
+    "LANGKAH 6: EKSEKUSI. HANYA JIKA pengguna menjawab 'Ya', panggil tool `start_chat_with_talent` untuk menyimpan percakapan. "
+    # --- Batas SOP lama ---
+
+    # --- SOP BARU YANG DISEMPURNAKAN UNTUK JOB OFFER ---
+    "SOP (Standard Operating Procedure) SAAT MENGIRIM PENAWARAN KERJA (JOB OFFER): "
+    "Saat pengguna meminta untuk 'mengirim penawaran', 'memberikan offering letter', atau sejenisnya kepada seorang kandidat, IKUTI LANGKAH-LANGKAH BERIKUT SECARA BERURUTAN: "
+
+    "LANGKAH 1: IDENTIFIKASI KANDIDAT. Pastikan Anda tahu siapa kandidat yang dituju. Minta ID kandidat jika perlu. "
+
+    "LANGKAH 2: KUMPULKAN DETAIL TAWARAN (METODE FLEKSIBEL). "
+    "  2a. PERTAMA, coba gunakan tool `get_offer_details` dengan ID kandidat untuk mendapatkan semua informasi secara otomatis. "
+    "  2b. JIKA GAGAL atau tool tidak menemukan data, TUGAS ANDA ADALAH BERTANYA KEPADA PENGGUNA untuk mendapatkan informasi yang kurang. Tanyakan satu per satu dengan sopan detail berikut: "
+    "    - Jumlah Gaji per bulan (misal: 15.000.000)"
+    "    - Tunjangan yang diberikan (misal: Asuransi kesehatan, bonus)"
+    "    - Waktu kerja (misal: Senin-Jumat, 09.00-17.00)"
+    "    - Benefit lainnya (misal: Cuti 14 hari, program pelatihan)"
+    "    - Nama pengirim surat (misal: Rina, Tim HR)"
+    "    - Kontak yang bisa dihubungi (misal: rina@perusahaan.com atau 081234567)"
+
+    "LANGKAH 3: BUAT DRAF SURAT TAWARAN. Setelah SEMUA informasi terkumpul (baik dari tool maupun dari jawaban pengguna), buat draf pesan HANYA menggunakan template berikut. Isi semua bagian yang ada di dalam kurung siku `[...]` dengan data yang sudah Anda kumpulkan. Jangan mengubah format template. "
+    "--- TEMPLATE SURAT TAWARAN ---"
+    "Selamat pagi, Pak/Bu [Nama Kandidat],\n\n"
+    "Terima kasih banyak atas waktu yang telah Anda luangkan untuk wawancara di [Nama Perusahaan] beberapa hari lalu. Kami sangat terkesan dengan pengalaman dan keterampilan Anda yang relevan dengan posisi [Nama Posisi] yang kami tawarkan.\n\n"
+    "Setelah melalui proses evaluasi yang seksama, kami senang untuk menawarkan Anda posisi [Nama Posisi] di [Nama Perusahaan]. Berikut adalah detail terkait tawaran kami:\n\n"
+    "- Gaji: Rp [Jumlah Gaji] per bulan\n"
+    "- Tunjangan: [Sebutkan tunjangan yang diberikan, seperti asuransi kesehatan, bonus, dll.]\n"
+    "- Waktu kerja: [Jadwal kerja, misalnya Senin-Jumat, 08.00-17.00]\n"
+    "- Benefit lainnya: [Sebutkan benefit lain seperti pelatihan, cuti, dll.]\n\n"
+    "Kami percaya bahwa Anda akan menjadi aset berharga bagi tim kami dan kami sangat berharap Anda dapat bergabung dengan kami. Silakan konfirmasi jika Anda menerima tawaran ini dengan mengirimkan tanda tangan Anda pada email ini sebagai bukti persetujuan.\n\n"
+    "Terima kasih sekali lagi atas perhatian Anda, dan kami menantikan jawaban Anda segera.\n\n"
+    "Saya tunggu kabar baik dari Anda.\n\n"
+    "Salam,\n"
+    "[Nama Anda]\n"
+    "HR [Nama Perusahaan]\n"
+    "[Kontak yang bisa dihubungi]"
+    "--- AKHIR TEMPLATE ---"
+
+    "LANGKAH 4: MINTA KONFIRMASI. Setelah draf lengkap, panggil tool `prepare_talent_message` untuk meminta konfirmasi dari pengguna. Di parameter `proposed_message`, masukkan seluruh isi draf surat tawaran. Tanya kepada pengguna: 'Berikut adalah draf surat penawaran untuk [Nama Kandidat]. Apakah sudah sesuai dan siap untuk dikirim?'"
+
+    "LANGKAH 5: EKSEKUSI. HANYA JIKA pengguna menjawab 'Ya', panggil tool `start_chat_with_talent` untuk menyimpan dan 'mengirim' surat penawaran tersebut. "
+    # --- Batas SOP baru ---
+
     "PENTING: Ketika Anda menerima hasil dari sebuah pemanggilan tool (function call), JANGAN PERNAH menampilkan data mentah JSON kepada pengguna. "
-    "Tugas Anda adalah menginterpretasikan data tersebut dan menyajikannya dalam format yang mudah dibaca, seperti kalimat lengkap, daftar bernomor, atau ringkasan. "
-    "Misalnya, jika Anda menerima daftar talent dalam format JSON, ubah itu menjadi daftar nama dan posisi yang rapi."
+    "Tugas Anda adalah menginterpretasikan data tersebut dan menyajikannya dalam format yang mudah dibaca, seperti kalimat lengkap atau ringkasan. "
     "Saat menjelaskan sesuatu, JANGAN GUNAKAN FORMAT MARKDOWN seperti bintang (**) untuk bold atau tanda hubung (-) untuk daftar. "
     "Gunakan kalimat lengkap dalam bentuk paragraf atau daftar bernomor (1., 2., 3.) jika diperlukan untuk membuat penjelasan yang rapi dan mudah dibaca."
-    "Jika Anda tidak tahu jawaban atas sebuah pertanyaan, katakan 'Maaf, saya tidak tahu.' "
-    "JANGAN buat-buat jawaban atau informasi."
-    "Jika ingin memunculan list atau daftar sajikan mirip dengan frormat mirip tabel atau dengan garis terpisah"
-    "ATURAN KHUSUS UNTUK MENGIRIM PESAN KE TALENT: "
-    "1. Jika pengguna meminta untuk mengirim pesan ke talent, JANGAN langsung memanggil fungsi `start_chat_with_talent`. "
-    "2. Sebagai gantinya, panggil fungsi `prepare_talent_message` terlebih dahulu. Buat draf pesan yang sopan dan relevan berdasarkan permintaan pengguna. "
-    "3. Tampilkan pertanyaan konfirmasi yang dihasilkan oleh `prepare_talent_message` kepada pengguna. "
-    "4. TUNGGU jawaban dari pengguna. Jika pengguna menjawab 'Ya' atau setuju, BARULAH panggil fungsi `start_chat_with_talent` dengan data dari langkah sebelumnya. Jika pengguna ingin mengubah pesan, ajukan pertanyaan untuk detailnya."
+    "Ketika menampilkan daftar lowongan, SELALU gunakan tool `list_job_openings_enriched` agar setiap item memiliki `company_name`. "
+    "Jangan tampilkan teks 'Perusahaan: Tidak disebutkan'. Jika lookup gagal, tampilkan 'Perusahaan: Tidak diketahui'. "
 )
 
 # ======================================================================
@@ -356,98 +404,112 @@ def chat():
     tool_runs = []
     final_text = ""
 
-    try:
-        ctx_messages = _ctx_slice(messages_full)
-        first = client.chat.completions.create(
-            model="gpt-4o",
-            messages=ctx_messages,
-            tools=TOOLS_SPEC,
-            tool_choice="auto",
-            temperature=0.2
-        )
-        resp_msg = first.choices[0].message
-        tool_calls = getattr(resp_msg, "tool_calls", None)
+    max_retries = 3
+    base_delay = 5  # detik
 
-        if tool_calls:
-            messages_full.append({
-                "role": "assistant",
-                "content": resp_msg.content or None,
-                "tool_calls": [
-                    {
-                        "id": tc.id, "type": tc.type,
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                    }
-                    for tc in tool_calls
-                ],
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            })
+    for attempt in range(max_retries):
+        try:
+            ctx_messages = _ctx_slice(messages_full)
+            first = client.chat.completions.create(
+                model="gpt-4o",
+                messages=ctx_messages,
+                tools=TOOLS_SPEC,
+                tool_choice="auto",
+                temperature=0.2
+            )
+            resp_msg = first.choices[0].message
+            tool_calls = getattr(resp_msg, "tool_calls", None)
 
-            for tc in tool_calls:
-                fname = tc.function.name
-                try:
-                    fargs = json.loads(tc.function.arguments or "{}")
-                except Exception:
-                    fargs = {}
-                try:
-                    out = AVAILABLE_FUNCS[fname](**fargs)
-                    _log_tool_call(userid, name, session_id, fname, fargs, out)
-                    result_json = json.dumps(out, ensure_ascii=False)
-                except Exception as fn_err:
-                    err_obj = {"error": str(fn_err)}
-                    _log_tool_call(userid, name, session_id, fname, fargs, err_obj)
-                    result_json = json.dumps(err_obj, ensure_ascii=False)
-                tool_runs.append({"name": fname, "args": fargs, "result": json.loads(result_json)})
+            if tool_calls:
                 messages_full.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "name": fname,
-                    "content": result_json,
+                    "role": "assistant",
+                    "content": resp_msg.content or None,
+                    "tool_calls": [
+                        {
+                            "id": tc.id, "type": tc.type,
+                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        }
+                        for tc in tool_calls
+                    ],
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 })
 
-            ctx_messages_2 = _ctx_slice(messages_full)
-            second = client.chat.completions.create(
-                model="gpt-4o",
-                messages=ctx_messages_2,
-                temperature=0.2
-            )
-            final_text = second.choices[0].message.content or ""
-        else:
-            final_text = resp_msg.content or ""
+                for tc in tool_calls:
+                    fname = tc.function.name
+                    try:
+                        fargs = json.loads(tc.function.arguments or "{}")
+                    except Exception:
+                        fargs = {}
+                    try:
+                        out = AVAILABLE_FUNCS[fname](**fargs)
+                        _log_tool_call(userid, name, session_id, fname, fargs, out)
+                        result_json = json.dumps(out, ensure_ascii=False)
+                    except Exception as fn_err:
+                        err_obj = {"error": str(fn_err)}
+                        _log_tool_call(userid, name, session_id, fname, fargs, err_obj)
+                        result_json = json.dumps(err_obj, ensure_ascii=False)
+                    tool_runs.append({"name": fname, "args": fargs, "result": json.loads(result_json)})
+                    messages_full.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "name": fname,
+                        "content": result_json,
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
 
-        messages_full.append({
-            "role": "assistant",
-            "content": final_text,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
+                ctx_messages_2 = _ctx_slice(messages_full)
+                second = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=ctx_messages_2,
+                    temperature=0.2
+                )
+                final_text = second.choices[0].message.content or ""
+            else:
+                final_text = resp_msg.content or ""
+            
+            break # Jika berhasil, keluar dari loop
 
-        if is_new_session:
-            append_session(
-                name=name,
-                session_id=session_id,
-                created_at=datetime.now(timezone.utc),
-                messages=messages_full,
-                title=generated_title or "Percakapan Baru"
-            )
-        else:
-            upsert_session_messages(name=name, session_id=session_id, messages=messages_full)
-            if generated_title:
-                update_session_title(name, session_id, generated_title)
+        except RateLimitError as e:
+            print(f"!! Rate limit terlampaui. Percobaan ke-{attempt + 1}. Menunggu {base_delay} detik...")
+            if attempt + 1 == max_retries:
+                return jsonify({"error": "Server sedang sibuk karena batas API tercapai. Silakan coba lagi dalam beberapa saat.", "detail": str(e)}), 429
+            time.sleep(base_delay)
+            base_delay *= 2
+        
+        except Exception as e:
+            return jsonify({"error": f"Gagal memproses: {type(e).__name__}", "detail": str(e)}), 500
 
-        response_data = {
-            "name": name,
-            "session_id": session_id,
-            "answer": final_text,
-            "tool_runs": tool_runs
-        }
-        if is_new_session:
-            response_data["new_session_id"] = session_id
-            response_data["title"] = generated_title or "Percakapan Baru"
+    messages_full.append({
+        "role": "assistant",
+        "content": final_text,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    })
 
-        return jsonify(response_data)
+    if is_new_session:
+        append_session(
+            name=name,
+            session_id=session_id,
+            created_at=datetime.now(timezone.utc),
+            messages=messages_full,
+            title=generated_title or "Percakapan Baru"
+        )
+    else:
+        upsert_session_messages(name=name, session_id=session_id, messages=messages_full)
+        if generated_title:
+            update_session_title(name, session_id, generated_title)
 
-    except Exception as e:
-        return jsonify({"error": f"Gagal memproses: {type(e).__name__}", "detail": str(e)}), 500
+    response_data = {
+        "name": name,
+        "session_id": session_id,
+        "answer": final_text,
+        "tool_runs": tool_runs
+    }
+    if is_new_session:
+        response_data["new_session_id"] = session_id
+        response_data["title"] = generated_title or "Percakapan Baru"
+
+    return jsonify(response_data)
+
 
 # ---------- NOTIFY INVITE ----------
 @app.route("/api/notify/invite", methods=["POST"])
@@ -639,7 +701,6 @@ def get_session_messages():
 # ======================================================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
-    host = int if False else os.environ.get("HOST", "127.0.0.1")  # keep style; no-op
     host = os.environ.get("HOST", "127.0.0.1")
     # Di Windows, reloader bawaan kadang memicu WinError 10038 saat restart.
     app.run(host=host, port=port, debug=True, use_reloader=False, threaded=True)
