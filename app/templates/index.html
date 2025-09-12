@@ -26,9 +26,8 @@
     .sessions{flex:1;overflow:auto;padding:8px}
     .sess{width:100%;text-align:left;background:#0f172a;border:1px solid var(--outline);border-radius:10px;padding:10px;margin-bottom:8px;cursor:pointer}
     .sess.active{outline:2px solid var(--accent)}
-    .sess .id{font-size:12px;font-weight:600;word-break:break-all}
+    .sess .id{font-size:12px;font-weight:600;word-break:break-all; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
     .sess .meta{font-size:11px;color:var(--muted)}
-    .summary-panel{display:none;margin:10px 14px 0 14px;background:#0f172a;border:1px dashed var(--outline);border-radius:10px;padding:10px 12px;font-size:13px}
     .chat{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px;background:var(--card)}
     .msg{max-width:72%;padding:12px 14px;border-radius:14px;line-height:1.45;position:relative;box-shadow:0 4px 10px rgba(0,0,0,.25)}
     .msg.user{align-self:flex-end;background:linear-gradient(135deg,var(--accent),#16a34a);color:#fff;border-bottom-right-radius:4px}
@@ -51,7 +50,7 @@
       <div class="content">
         <div id="stepUser">
           <div class="row">
-            <input id="user" placeholder="User [id@nama] — contoh: u123@Budi Santoso" />
+            <input id="user" placeholder="User [id@nama] — contoh: 123@Budi Santoso" />
           </div>
           <div class="row">
             <input id="token" placeholder="Token (opsional) untuk Authorization: Bearer ..." />
@@ -65,7 +64,7 @@
         <div id="stepSessions" style="display:none">
           <div class="row">
             <button id="btnLoad" class="ghost">Load Sessions</button>
-            <button id="btnNew" class="ghost">New Session</button>
+            <button id="btnNew" class="primary">New Session</button>
           </div>
           <div id="banner" class="banner" style="display:none"></div>
           <div id="sessions" class="sessions"></div>
@@ -75,7 +74,6 @@
 
     <div class="card">
       <h3>Chat</h3>
-      <div id="summary" class="summary-panel"></div>
       <div id="chat" class="chat"></div>
       <div class="composer">
         <textarea id="input" placeholder="Ketik pesan…" disabled></textarea>
@@ -85,291 +83,199 @@
   </div>
 
   <script>
-    // =========================
-    // Konfigurasi
-    // =========================
-    const API_BASE = ""; // kosong = origin yang sama.
+    const API_BASE = "";
 
-    // =========================
-    // Helper DOM
-    // =========================
     const $ = (id) => document.getElementById(id);
-    const userEl = $("user");
-    const tokenEl = $("token");
-    const stepUserEl = $("stepUser");
-    const stepSessionsEl = $("stepSessions");
-    const sessionsEl = $("sessions");
-    const chatEl = $("chat");
-    const summaryEl = $("summary");
-    const inputEl = $("input");
-    const bannerEl = $("banner");
-    const btnOk = $("btnOk");
-    const btnLoad = $("btnLoad");
-    const btnNew = $("btnNew");
-    const btnSend = $("btnSend");
+    const userEl = $("user"), tokenEl = $("token"), stepUserEl = $("stepUser");
+    const stepSessionsEl = $("stepSessions"), sessionsEl = $("sessions"), chatEl = $("chat");
+    const inputEl = $("input"), bannerEl = $("banner");
+    const btnOk = $("btnOk"), btnLoad = $("btnLoad"), btnNew = $("btnNew"), btnSend = $("btnSend");
 
     let selectedSession = localStorage.getItem("chat_selected_session") || null;
-    let messagesInView = [];
-    let currentSessions = []; // cache hasil /api/sessions
 
-    // restore ringan
     userEl.value = localStorage.getItem("chat_user") || "";
     tokenEl.value = localStorage.getItem("chat_token") || "";
 
-    // ---------- util ----------
     function savePrefs(){
-      localStorage.setItem("chat_user", userEl.value);
-      localStorage.setItem("chat_token", tokenEl.value);
-      localStorage.setItem("chat_selected_session", selectedSession || "");
+        localStorage.setItem("chat_user", userEl.value);
+        localStorage.setItem("chat_token", tokenEl.value);
+        localStorage.setItem("chat_selected_session", selectedSession || "");
     }
 
     function showBanner(text, kind="ok"){
-      if(!text){ bannerEl.style.display="none"; return; }
-      bannerEl.className = "banner " + (kind==="err" ? "err" : "ok");
-      bannerEl.textContent = text;
-      bannerEl.style.display = "block";
-    }
-
-    function showSummary(text){
-      if(text && text.trim()){
-        summaryEl.textContent = text;
-        summaryEl.style.display = "block";
-      }else{
-        summaryEl.textContent = "";
-        summaryEl.style.display = "none";
-      }
+        if(!text){ bannerEl.style.display="none"; return; }
+        bannerEl.className = `banner ${kind==="err" ? "err" : "ok"}`;
+        bannerEl.textContent = text;
+        bannerEl.style.display = "block";
     }
 
     function validUser(u){
-      return u && u.includes("@") && u.split("@")[0].trim() && u.split("@")[1].trim();
+        return u && u.includes("@") && u.split("@")[0].trim() && u.split("@")[1].trim();
     }
 
     function headers(json=true){
-      const h = {};
-      if(json) h["Content-Type"] = "application/json";
-      const t = tokenEl.value.trim();
-      if(t) h["Authorization"] = `Bearer ${t}`;
-      return h;
+        const h = {};
+        if(json) h["Content-Type"] = "application/json";
+        const t = tokenEl.value.trim();
+        if(t) h["Authorization"] = `Bearer ${t}`;
+        return h;
     }
 
     async function api(path, payload){
-      const init = { headers: headers(!!payload) };
-      if(payload){ init.method = "POST"; init.body = JSON.stringify(payload); }
-      const res = await fetch(API_BASE + path, init);
-      let data = null;
-      try{ data = await res.json(); }catch(_){}
-      if(!res.ok){
-        throw new Error((data && data.error) || `HTTP ${res.status}`);
-      }
-      return data;
+        const init = { headers: headers(!!payload) };
+        if(payload){ init.method = "POST"; init.body = JSON.stringify(payload); }
+        const res = await fetch(API_BASE + path, init);
+        const data = await res.json().catch(() => null);
+        if(!res.ok) throw new Error((data && data.error) || `HTTP ${res.status}`);
+        return data;
     }
 
-    // =========================
-    // STEP 1: OK (tidak auto-buka sesi)
-    // =========================
     async function confirmUser(){
-      const u = userEl.value.trim();
-      if(!validUser(u)){ showBanner("Isi user dengan format: id@nama", "err"); return; }
-      savePrefs();
-      showBanner("");
-      await loadSessions(); // hanya muat daftar
-      stepUserEl.style.display = "none";
-      stepSessionsEl.style.display = "block";
-      inputEl.disabled = true;
-      btnSend.disabled = true;
-      showSummary("");
-      chatEl.innerHTML = "<div class='meta'>Pilih salah satu sesi di kiri, atau klik New Session.</div>";
+        const u = userEl.value.trim();
+        if(!validUser(u)){ showBanner("Isi user dengan format: id@nama", "err"); return; }
+        savePrefs();
+        showBanner("");
+        await loadSessions();
     }
 
-    // =========================
-    // Sessions
-    // =========================
     async function loadSessions(){
-      const u = userEl.value.trim();
-      if(!validUser(u)){ showBanner("Isi user dengan format: id@nama", "err"); return; }
-      sessionsEl.innerHTML = "<div class='meta'>Memuat...</div>";
-      try{
-        const data = await api(`/api/sessions?user=${encodeURIComponent(u)}`);
-        const list = (data.sessions || []).slice().sort((a,b)=>{
-          const ta = a.created_at ? Date.parse(a.created_at) : 0;
-          const tb = b.created_at ? Date.parse(b.created_at) : 0;
-          return tb - ta;
-        });
-        currentSessions = list;
-        renderSessions(list);
-        if(list.length){
-          showBanner(`Ditemukan ${list.length} sesi untuk ${data.name}`, "ok");
-        }else{
-          showBanner(`Belum ada sesi untuk ${data.name}. Klik New Session untuk membuat.`, "ok");
+        const u = userEl.value.trim();
+        if(!validUser(u)){ showBanner("Isi user dengan format: id@nama", "err"); return; }
+        sessionsEl.innerHTML = "<div class='meta'>Memuat...</div>";
+        try{
+            const data = await api(`/api/sessions?user=${encodeURIComponent(u)}`);
+            stepUserEl.style.display = "none";
+            stepSessionsEl.style.display = "block";
+            const list = (data.sessions || []).sort((a,b) => (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0));
+            renderSessions(list);
+            showBanner(list.length ? `Ditemukan ${list.length} sesi untuk ${data.name}` : `Belum ada sesi. Klik New Session.`, "ok");
+        }catch(e){
+            sessionsEl.innerHTML = "";
+            showBanner(e.message || "Gagal memuat sesi", "err");
+            stepUserEl.style.display = "block";
+            stepSessionsEl.style.display = "none";
         }
-      }catch(e){
-        sessionsEl.innerHTML = "";
-        showBanner(e.message || "Gagal memuat sesi", "err");
-      }
     }
 
     function renderSessions(list){
-      sessionsEl.innerHTML = "";
-      if(!list.length){
-        sessionsEl.innerHTML = "<div class='meta'>Belum ada sesi.</div>";
-        return;
-      }
-      list.forEach(s => {
-        const btn = document.createElement("button");
-        btn.className = "sess" + (selectedSession === s.session_id ? " active" : "");
-        btn.dataset.sid = s.session_id;
-        
-        btn.innerHTML = `
-          <div class="id">${s.title}</div>
-          <div class="meta">Dibuat: ${s.created_at ? new Date(s.created_at).toLocaleString() : "-"}</div>
-          <div class="meta">Pesan: ${s.messages_count ?? 0}</div>
-        `;
-        
-        btn.onclick = () => activateSession(s.session_id, false);
-        sessionsEl.appendChild(btn);
-      });
+        sessionsEl.innerHTML = !list.length ? "<div class='meta'>Belum ada sesi.</div>" : "";
+        list.forEach(s => {
+            const btn = document.createElement("button");
+            btn.className = "sess" + (selectedSession === s.session_id ? " active" : "");
+            btn.dataset.sid = s.session_id;
+            btn.innerHTML = `
+                <div class="id" title="${s.title}">${s.title}</div>
+                <div class="meta">Dibuat: ${s.created_at ? new Date(s.created_at).toLocaleString('id-ID', {dateStyle:'short', timeStyle:'short'}) : "-"}</div>
+                <div class="meta">Pesan: ${s.messages_count ?? 0}</div>
+            `;
+            btn.onclick = () => activateSession(s.session_id, false);
+            sessionsEl.appendChild(btn);
+        });
     }
 
     async function activateSession(sessionId, isNewExplicit){
-      const u = userEl.value.trim();
-      if(!validUser(u)){ showBanner("Isi user dengan format: id@nama", "err"); return; }
+        const u = userEl.value.trim();
+        if(!validUser(u)){ showBanner("Isi user dengan format: id@nama", "err"); return; }
 
-      // highlight
-      selectedSession = sessionId;
-      savePrefs();
-      document.querySelectorAll(".sess").forEach(x => {
-        if(x.dataset.sid === sessionId) x.classList.add("active"); else x.classList.remove("active");
-      });
+        selectedSession = sessionId;
+        savePrefs();
+        document.querySelectorAll(".sess").forEach(x => x.classList.toggle("active", x.dataset.sid === sessionId));
 
-      // reset
-      messagesInView = [];
-      chatEl.innerHTML = "<div class='meta'>Memuat pesan…</div>";
-      showSummary(""); 
+        chatEl.innerHTML = "<div class='meta'>Memuat pesan…</div>";
 
-      try{
-        const data = await api(`/api/session/messages?user=${encodeURIComponent(u)}&session_id=${encodeURIComponent(selectedSession)}`);
-        const allMsgs = (data.messages || []);
-        const nonSystem = allMsgs.filter(m => !!m && m.role !== "system");
-
-        const justGreeting = (nonSystem.length === 1 && nonSystem[0].role === "assistant");
-        const isNew = isNewExplicit || justGreeting;
-
-        chatEl.innerHTML = "";
-
-        if(isNew){
-          if(!nonSystem.length){
-            addMsg("assistant", "(Belum ada pesan)");
-          }else{
-            nonSystem.forEach(m => addMsg(m.role === "user" ? "user" : "assistant", m.content || ""));
-          }
-        }else{
-          try{
-            const sum = await api(`/api/session/summary?user=${encodeURIComponent(u)}&session_id=${encodeURIComponent(selectedSession)}`);
-            if(!sum.skip && (sum.summary || "").trim()){
-              showSummary("Ringkasan sesi ini: " + sum.summary);
-            }else{
-              showSummary("");
+        try{
+            const data = await api(`/api/session/messages?user=${encodeURIComponent(u)}&session_id=${encodeURIComponent(selectedSession)}`);
+            const nonSystem = (data.messages || []).filter(m => m && m.role !== "system");
+            
+            chatEl.innerHTML = "";
+            
+            if(!nonSystem.length){
+                addMsg("assistant", "(Sesi ini kosong)", new Date().toISOString());
+            } else {
+                nonSystem.forEach(m => addMsg(m.role, m.content || "", m.timestamp));
             }
-          }catch(e){
-            showSummary("[gagal mengambil ringkasan]");
-          }
-          if(!nonSystem.length){
-            addMsg("assistant", "(Belum ada pesan)");
-          }else{
-            nonSystem.forEach(m => addMsg(m.role === "user" ? "user" : "assistant", m.content || ""));
-          }
+            
+            if (!isNewExplicit) {
+                const userName = data.name || u.split('@')[1];
+                const welcomeBackMsg = `Selamat datang kembali, ${userName}! Anda bisa melanjutkan percakapan ini.`;
+                addMsg("assistant", welcomeBackMsg, new Date().toISOString());
+            }
+
+            showBanner(`Session aktif: ${sessionId.substring(0,18)}...`, "ok");
+            inputEl.disabled = false;
+            btnSend.disabled = false;
+            inputEl.focus();
+        }catch(e){
+            chatEl.innerHTML = "";
+            addMsg("assistant", "[error] " + (e.message || "Gagal memuat pesan"), new Date().toISOString());
+            showBanner(e.message || "Gagal memuat pesan", "err");
         }
-
-        showBanner(`Session aktif: ${selectedSession}`, "ok");
-        inputEl.disabled = false;
-        btnSend.disabled = false;
-        inputEl.focus();
-      }catch(e){
-        chatEl.innerHTML = "";
-        addMsg("assistant", "[error] " + (e.message || "Gagal memuat pesan"));
-        showBanner(e.message || "Gagal memuat pesan", "err");
-      }
     }
-
+    
     async function newSession(){
-      selectedSession = null;
-      savePrefs();
+        const u = userEl.value.trim();
+        if(!validUser(u)) return showBanner("User tidak valid.", "err");
 
-      document.querySelectorAll(".sess").forEach(x => x.classList.remove("active"));
-      chatEl.innerHTML = "<div class='meta'>Ketik pesan untuk memulai percakapan baru.</div>";
-      summaryEl.style.display = "none";
-      showBanner("Mode percakapan baru. Sesi akan dibuat setelah Anda mengirim pesan pertama.", "ok");
-      
-      inputEl.disabled = false;
-      btnSend.disabled = false;
-      inputEl.focus();
+        showBanner("Membuat sesi baru...", "ok");
+        chatEl.innerHTML = "<div class='meta'>Mohon tunggu...</div>";
+        inputEl.disabled = true;
+        btnSend.disabled = true;
+
+        try {
+            const data = await api("/api/sessions", { user: u });
+            await loadSessions(); 
+            await activateSession(data.session_id, true);
+        } catch(e) {
+            showBanner(e.message || "Gagal membuat sesi baru", "err");
+            chatEl.innerHTML = "";
+        }
     }
 
-    // =========================
-    // Chat
-    // =========================
-    function addMsg(role, content){
-      const box = document.createElement("div");
-      box.className = `msg ${role}`;
-      box.textContent = content;
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      meta.textContent = new Date().toLocaleTimeString();
-      box.appendChild(meta);
-      chatEl.appendChild(box);
-      chatEl.scrollTop = chatEl.scrollHeight; 
-      messagesInView.push({role, content});
+    function addMsg(role, content, timestamp){
+        const box = document.createElement("div");
+        box.className = `msg ${role}`;
+        box.textContent = content;
+        
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = timestamp 
+            ? new Date(timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) 
+            : new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+        box.appendChild(meta);
+        chatEl.appendChild(box);
+        chatEl.scrollTop = chatEl.scrollHeight;
     }
 
     async function sendMessage(){
-      const u = userEl.value.trim();
-      const msg = inputEl.value;
-      if(!validUser(u)){ showBanner("Isi user dengan format: id@nama", "err"); return; }
-      if(!msg.trim()) return;
+        const u = userEl.value.trim();
+        const msg = inputEl.value.trim();
+        if(!validUser(u)) return showBanner("Isi user dengan format: id@nama", "err");
+        if(!msg) return;
 
-      const isNewChat = !selectedSession;
-
-      if (isNewChat && chatEl.querySelector(".meta")) {
-        chatEl.innerHTML = "";
-      }
-      
-      addMsg("user", msg);
-      inputEl.value = "";
-      
-      try{
-        const payload = { user: u, message: msg };
-        if (!isNewChat) {
-            payload.session_id = selectedSession;
-        }
-
-        const res = await api("/api/chat", payload);
+        if (!selectedSession) return showBanner("Tidak ada sesi aktif. Klik 'New Session' dahulu.", "err");
         
-        addMsg("assistant", res.answer || "(kosong)");
-
-        if (res.new_session_id) {
-            selectedSession = res.new_session_id;
-            savePrefs();
-            showBanner("Sesi baru berhasil dibuat. Session aktif: " + selectedSession, "ok");
-            await loadSessions(); 
+        addMsg("user", msg, new Date().toISOString());
+        inputEl.value = "";
+        
+        try{
+            const payload = { user: u, message: msg, session_id: selectedSession };
+            const res = await api("/api/chat", payload);
+            addMsg("assistant", res.answer || "(kosong)", new Date().toISOString());
+        }catch(e){
+            addMsg("assistant", "[error] " + (e.message || "Gagal mengirim pesan"), new Date().toISOString());
         }
-
-      }catch(e){
-        addMsg("assistant", "[error] " + (e.message || "Gagal mengirim pesan"));
-      }
     }
 
-    // =========================
-    // Events
-    // =========================
     btnOk.onclick   = confirmUser;
-    btnLoad.onclick = () => loadSessions(); // refresh manual
+    btnLoad.onclick = loadSessions;
     btnNew.onclick  = newSession;
     btnSend.onclick = sendMessage;
     inputEl.addEventListener("keydown", (e) => {
-      if(e.key === "Enter" && !e.shiftKey){
-        e.preventDefault();
-        sendMessage();
-      }
+        if(e.key === "Enter" && !e.shiftKey){
+            e.preventDefault();
+            sendMessage();
+        }
     });
   </script>
 </body>
