@@ -376,8 +376,23 @@ def delete_company_property(prop_id: int):
     return relogin_once_on_401(_delete_resource, "company-properties", prop_id)
 
 # ===================== RESOURCE: JOB OPENINGS =====================
-def list_job_openings(page: int = 1, per_page: int = 10, search: Optional[str] = None):
-    return relogin_once_on_401(_list_resource, "job-openings", page, per_page, search)
+def list_job_openings(search: Optional[str] = None):
+    from vectordb import Chroma
+    print("HELLO")
+    try:
+        collection = Chroma().client().get_or_create_collection(name="job_openings")
+        results = collection.query(
+            query_texts=[search], # Chroma will embed this for you
+            n_results=2 # how many results to return
+        )
+        return results
+    except Exception as error:
+        print("Error Tools")
+        print(error)
+    else:
+        return "None"
+
+    # return relogin_once_on_401(_list_resource, "job-openings", page, per_page, search)
 
 def get_job_opening_detail(opening_id: int):
     return relogin_once_on_401(_get_detail, "job-openings", opening_id)

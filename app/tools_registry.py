@@ -557,8 +557,6 @@ tools = [
         "parameters": {
           "type": "object",
           "properties": {
-            "page": {"type": "integer", "default": 1},
-            "per_page": {"type": "integer", "default": 10},
             "search": {"type": "string"}
           }
         }

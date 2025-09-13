@@ -436,6 +436,27 @@ def get_session_messages():
         "messages": msgs
     })
 
+
+from feeder import Feeder
+@app.post("/api/feeder/job_openings")
+def feed_job_opening():
+    payload = request.json
+    Feeder().pushJobOpening(payload['data'])
+
+    return jsonify({
+        "status": "success"
+    })
+
+@app.post("/api/feeder/talents")
+def feed_job_opening():
+    payload = request.json
+    Feeder().pushJobOpening(payload['data'])
+
+    return jsonify({
+        "status": "success"
+    })
+
+
 # ======================================================================
 # MAIN
 # ======================================================================
