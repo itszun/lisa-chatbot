@@ -229,14 +229,14 @@ def list_sessions():
 
     user_field = (request.args.get("user") or "").strip()
     try:
-        userid, name = parse_user(user_field)
+        name = user_field
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
 
     if not mongo_client:
         return jsonify({"error": "MongoDB tidak tersedia"}), 500
 
-    doc = get_or_create_chat_doc(userid=userid, name=name)
+    doc = get_or_create_chat_doc(name=name)
     sessions = []
     for s in doc.get("sessions", []):
         created = s.get("created_at")
@@ -404,7 +404,7 @@ def get_session_messages():
     if not user_field or not session_id:
         return jsonify({"error": "Parameter 'user' dan 'session_id' wajib diisi."}), 400
     try:
-        userid, name = parse_user(user_field)
+        name = user_field
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
     if not mongo_client:
