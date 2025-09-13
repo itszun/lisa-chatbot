@@ -424,6 +424,33 @@ def get_session_messages():
 
 
 from feeder import Feeder
+@app.post("/api/feeder/talents")
+def feed_talent():
+    payload = request.json
+    Feeder().pushTalentInfo(payload['data'])
+
+    return jsonify({
+        "status": "success"
+    })
+
+@app.post("/api/feeder/companies")
+def feed_job_company():
+    payload = request.json
+    Feeder().pushCompanyInfo(payload['data'])
+
+    return jsonify({
+        "status": "success"
+    })
+
+@app.post("/api/feeder/candidates")
+def feed_job_candidate():
+    payload = request.json
+    Feeder().pushCandidate(payload['data'])
+
+    return jsonify({
+        "status": "success"
+    })
+
 @app.post("/api/feeder/job_openings")
 def feed_job_opening():
     payload = request.json
@@ -433,10 +460,11 @@ def feed_job_opening():
         "status": "success"
     })
 
-@app.post("/api/feeder/talents")
-def feed_job_opening():
+
+@app.post("/api/feeder/users")
+def feed_job_user():
     payload = request.json
-    Feeder().pushJobOpening(payload['data'])
+    Feeder().pushUserInfo(payload['data'])
 
     return jsonify({
         "status": "success"
