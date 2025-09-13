@@ -78,7 +78,7 @@ DEFAULT_SYSTEM_PROMPT = (
     # --- BARU: ATURAN UNTUK PERMINTAAN DI LUAR KONTEKS ---
     "ATURAN DI LUAR LINGKUP: Jika pengguna memberikan pertanyaan atau perintah yang sama sekali tidak berhubungan dengan tugas Anda (misal: bertanya tentang cuaca, berita, atau pengetahuan umum), jangan mencoba menjawabnya. Tolak dengan sopan dan arahkan kembali pengguna ke fungsi utama Anda. "
     "Contoh: 'Maaf, saya adalah asisten rekruter dan hanya bisa membantu Anda untuk mengelola data talenta, kandidat, perusahaan, dan lowongan kerja. Adakah yang bisa saya bantu terkait hal tersebut?'"
-    
+
     # --- 2. PANDUAN PEMETAAN PERINTAH KE TOOLS (SANGAT PENTING) ---
     "Berikut adalah pemetaan pasti dari permintaan pengguna ke tool yang WAJIB Anda gunakan:"
 
@@ -167,16 +167,15 @@ def parse_user(user_field: str) -> Tuple[str, str]:
         raise ValueError("userid atau nama tidak boleh kosong.")
     return userid, name
 
-def get_or_create_chat_doc(userid: str, name: str) -> dict:
-    doc = users_chats.find_one({"_id": userid})
+def get_or_create_chat_doc(name: str) -> dict:
+    # --- PERBAIKAN DI SINI ---
+    # Fungsi ini sekarang HANYA menerima 'name'
+    doc = users_chats.find_one({"name": name})
     if doc:
-        if doc.get("name") != name:
-            users_chats.update_one({"_id": userid}, {"$set": {"name": name}})
-            doc["name"] = name
         return doc
-    new_doc = {"_id": userid, "name": name, "sessions": []}
+    new_doc = {"name": name, "sessions": []}
     users_chats.insert_one(new_doc)
-    return new_doc
+    return users_chats.find_one({"name": name})
 
 def find_session(doc: dict, session_id: str) -> Optional[dict]:
     for s in (doc.get("sessions") or []):
@@ -184,17 +183,17 @@ def find_session(doc: dict, session_id: str) -> Optional[dict]:
             return s
     return None
 
-def upsert_session_messages(userid: str, session_id: str, messages: List[dict]) -> None:
+def upsert_session_messages(name: str, session_id: str, messages: List[dict]) -> None:
     users_chats.update_one(
-        {"_id": userid, "sessions.session_id": session_id},
+        {"name": name, "sessions.session_id": session_id},
         {"$set": {"sessions.$.messages": messages}}
     )
 
-def append_session(userid: str, session_id: str, created_at: datetime, messages: List[dict], title: str) -> None:
+def append_session(name: str, session_id: str, created_at: datetime, messages: List[dict], title: str) -> None:
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
     users_chats.update_one(
-        {"_id": userid},
+        {"name": name},
         {"$push": {"sessions": {
             "session_id": session_id, "created_at": created_at,
             "title": title, "messages": messages
@@ -206,7 +205,7 @@ def _extract_bearer_token(req) -> str:
     if auth.lower().startswith("bearer "):
         return auth.split(" ", 1)[1].strip()
     return ""
-
+   
 # ======================================================================
 # IMPORT TOOLS + INJEKSI HELPER
 # ======================================================================
@@ -299,7 +298,6 @@ def create_session():
 def chat():
     data = request.get_json(force=True)
     try:
-        # Otentikasi opsional
         incoming_token = _extract_bearer_token(request)
         if incoming_token: ensure_token(preferred_token=incoming_token)
     except Exception as e:
@@ -320,6 +318,8 @@ def chat():
     
     if is_new_session:
         session_id = str(uuid4())
+        # --- PERBAIKAN DI SINI ---
+        # Panggilan ini sekarang cocok dengan definisinya
         get_or_create_chat_doc(name=user_name)
         messages_full = [
             {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
@@ -335,7 +335,6 @@ def chat():
         messages_full = sess.get("messages", [])
         messages_full.append({"role": "user", "content": user_msg})
 
-    # (Sisa kode untuk memanggil AI dan tool tidak berubah)
     def _ctx_slice(msgs: List[dict]) -> List[dict]:
         if len(msgs) > MAX_HISTORY_MESSAGES:
             return [msgs[0]] + msgs[-MAX_HISTORY_MESSAGES:]
@@ -368,6 +367,7 @@ def chat():
         else:
             final_text = resp_msg.content or ""
     except Exception as e:
+        traceback.print_exc()
         return jsonify({"error": f"Gagal memproses: {type(e).__name__}", "detail": str(e)}), 500
 
     messages_full.append({"role": "assistant", "content": final_text})
