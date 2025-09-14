@@ -1,23 +1,37 @@
 #tools_registry.py
+# Berisi definisi alat (tools) yang dapat digunakan oleh AI,
+# serta fungsi-fungsi pembantu untuk mengakses API Laravel.
 import json
 import requests
 from uuid import uuid4
 from datetime import datetime, timezone
 from typing import Optional
 
+
 # ===== Helper injection (tanpa import app.py untuk hindari circular) =====
+# fungsi helper yang akan diisi dari app.py
+# get_or_create_chat_doc, append_session, DEFAULT_SYSTEM_PROMPT
+# ini untuk mengakses MongoDB dari dalam tools_registry.py
 _helpers = {
     "get_or_create_chat_doc": None,
     "append_session": None,
     "DEFAULT_SYSTEM_PROMPT": "Anda adalah asisten AI."
 }
 
+# fungsi set_helpers untuk mengisi helper dari app.py
+# dipanggil sekali dari app.py saat startup
+# digunakan untuk mengakses MongoDB dari dalam tools_registry.py
+# tujuan utamanya adalah agar fungsi start_chat_with_talent dapat membuat sesi chat baru
+# tanpa membuat dependensi melingkar antara app.py dan tools_registry.py
 def set_helpers(get_or_create_chat_doc, append_session, default_system_prompt):
     _helpers["get_or_create_chat_doc"] = get_or_create_chat_doc
     _helpers["append_session"] = append_session
     _helpers["DEFAULT_SYSTEM_PROMPT"] = default_system_prompt
 
 # ===== Impor fungsi-fungsi API client Anda =====
+# Pastikan api_client.py ada di direktori yang sama
+# dan berisi fungsi-fungsi untuk berinteraksi dengan API Laravel Anda
+# Contoh fungsi: list_talent, get_talent_detail, create_talent, dll.
 from api_client import (
     # talent
     list_talent, get_talent_detail, create_talent, update_talent, delete_talent,
@@ -38,6 +52,7 @@ from api_client import (
 LARAVEL_API_BASE = "http://127.0.0.1:8000/api"
 
 # ========== FUNGSI-FUNGSI BARU UNTUK INTEGRASI LARAVEL ==========
+# Ambil semua talent
 def get_talents():
     try:
         response = requests.get(f"{LARAVEL_API_BASE}/talents", timeout=15)
@@ -46,11 +61,8 @@ def get_talents():
     except requests.exceptions.RequestException as e:
         return {"error": f"Gagal menghubungi API Laravel: {str(e)}"}
 
+# Siapkan pesan draf untuk konfirmasi sebelum mengirim ke talent
 def prepare_talent_message(talent_id: int, talent_name: str, sender_name: str, proposed_message: str):
-    """
-    Menyiapkan draf pesan untuk dikirim ke talent.
-    Fungsi ini sekarang bisa mengambil detail talent untuk konteks tambahan.
-    """
     talent_details = get_talent_detail(talent_id=talent_id)
     skills = talent_details.get("skills", [])
     
@@ -66,28 +78,31 @@ def prepare_talent_message(talent_id: int, talent_name: str, sender_name: str, p
         )
     }
 
-def start_chat_with_talent(user_id: str, initial_message: str):
-    """
-    Membuat sesi chat baru di MongoDB untuk seorang talent spesifik.
-    Format nama dokumen akan menjadi 'id@nama_dengan_underscore'.
-    """
+# Mulai sesi chat baru dengan talent
+# Gunakan helper yang diinjeksikan untuk mengakses MongoDB
+# Gunakan nama talent sebagai 'name' di koleksi user_chat
+# Simpan sesi baru dengan pesan sistem dan salam personalisasi
+# Kembalikan metadata sesi baru (tanpa pesan lengkap)
+def start_chat_with_talent(talent_id: str, talent_name: str, initial_message: str):
     try:
+        # Pengecekan helper, pastikan sudah diinisialisasi
         if not _helpers["get_or_create_chat_doc"] or not _helpers["append_session"]:
             return {"success": False, "error": "helpers belum diinisialisasi dari app.py"}
 
-        document_name = user_id
-
-        _helpers["get_or_create_chat_doc"](name=document_name)
+        _helpers["get_or_create_chat_doc"](
+            userid=str(talent_id), 
+            name=talent_name
+        )
 
         new_session_id = str(uuid4())
         created_at = datetime.now(timezone.utc)
         messages = [
-            {"role": "system", "content": _helpers["DEFAULT_SYSTEM_PROMPT"], "timestamp": created_at.isoformat()},
-            {"role": "assistant", "content": initial_message, "timestamp": created_at.isoformat()},
+            {"role": "system", "content": _helpers["DEFAULT_SYSTEM_PROMPT"]},
+            {"role": "assistant", "content": initial_message},
         ]
 
         _helpers["append_session"](
-            name=document_name,
+            name=talent_name,
             session_id=new_session_id,
             created_at=created_at,
             messages=messages,
@@ -96,13 +111,16 @@ def start_chat_with_talent(user_id: str, initial_message: str):
 
         return {
             "success": True,
-            "message": f"Sesi chat baru dengan {document_name} berhasil dibuat.",
+            "message": f"Sesi chat baru dengan {talent_name} berhasil dibuat.",
             "session_id": new_session_id
         }
     except Exception as e:
-        print(f"!!! ERROR di dalam TOOL start_chat_with_talent: {e}")
+        import traceback
+        traceback.print_exc() 
         return {"success": False, "error": str(e)}
 
+# Ambil daftar lowongan dan lengkapi dengan nama perusahaan
+# Berdasarkan company_id di setiap lowongan
 def list_job_openings_enriched(page: int = 1, per_page: int = 10, search: Optional[str] = None):
     """
     Ambil daftar lowongan lalu lengkapi dengan company_name berdasarkan company_id.
