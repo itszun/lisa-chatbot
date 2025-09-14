@@ -17,7 +17,7 @@ class Chroma:
         self._client = chromadb.CloudClient(
             api_key=os.getenv("CHROMADB_API_KEY"),
             tenant='39d106f4-0829-4e38-beed-1e8627fe7afb',
-            database='lisa-chat'
+            database=os.getenv("CHROMADB_DB")
         )
     
     def client(self):
