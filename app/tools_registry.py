@@ -83,15 +83,15 @@ def prepare_talent_message(talent_id: int, talent_name: str, sender_name: str, p
 # Gunakan nama talent sebagai 'name' di koleksi user_chat
 # Simpan sesi baru dengan pesan sistem dan salam personalisasi
 # Kembalikan metadata sesi baru (tanpa pesan lengkap)
-def start_chat_with_talent(talent_id: str, talent_name: str, initial_message: str):
+def start_chat_with_talent(chat_user_id: str, initial_message: str):
     try:
         # Pengecekan helper, pastikan sudah diinisialisasi
         if not _helpers["get_or_create_chat_doc"] or not _helpers["append_session"]:
             return {"success": False, "error": "helpers belum diinisialisasi dari app.py"}
 
         _helpers["get_or_create_chat_doc"](
-            userid=str(talent_id), 
-            name=talent_name
+            userid=chat_user_id, 
+            name=chat_user_id
         )
 
         new_session_id = str(uuid4())
@@ -102,7 +102,7 @@ def start_chat_with_talent(talent_id: str, talent_name: str, initial_message: st
         ]
 
         _helpers["append_session"](
-            name=talent_name,
+            name=chat_user_id,
             session_id=new_session_id,
             created_at=created_at,
             messages=messages,
@@ -111,7 +111,7 @@ def start_chat_with_talent(talent_id: str, talent_name: str, initial_message: st
 
         return {
             "success": True,
-            "message": f"Sesi chat baru dengan {talent_name} berhasil dibuat.",
+            "message": f"Sesi chat baru dengan {chat_user_id} berhasil dibuat.",
             "session_id": new_session_id
         }
     except Exception as e:
@@ -168,11 +168,11 @@ def list_job_openings_enriched(page: int = 1, per_page: int = 10, search: Option
     else:
         return enriched_data
     
-def initiate_contact(talent_id: int, user_id: int, talent_name: str, job_opening_id: int, initial_message: str):
+def initiate_contact(talent_id: int, talent_name: str, chat_user_id: int, job_opening_id: int, initial_message: str):
     """
     Mendaftarkan talent sebagai kandidat untuk sebuah lowongan DAN memulai sesi chat baru.
     Ini adalah tool utama untuk kontak awal.
-    Membutuhkan user_id milik talent dgn format "id@user_name"
+    Membutuhkan chat_user_id milik talent dgn format "id@user_name"
     """
     try:
         # Langkah 1: Daftarkan sebagai kandidat
@@ -181,11 +181,11 @@ def initiate_contact(talent_id: int, user_id: int, talent_name: str, job_opening
              return {"success": False, "error": f"Gagal membuat kandidat: {candidate_result['error']}"}
 
         # Langkah 2: Jika berhasil, mulai sesi chat
-        chat_result = start_chat_with_talent(user_id=user_id, initial_message=initial_message)
+        chat_result = start_chat_with_talent(chat_user_id=chat_user_id, initial_message=initial_message)
         if not chat_result.get("success"):
             return {"success": False, "error": f"Kandidat dibuat, tapi gagal memulai chat: {chat_result['error']}"}
 
-        return {"success": True, "message": f"Talent {user_id} berhasil didaftarkan sebagai kandidat dan pesan pertama telah dikirim."}
+        return {"success": True, "message": f"Talent {chat_user_id} berhasil didaftarkan sebagai kandidat dan pesan pertama telah dikirim."}
 
     except Exception as e:
         return {"success": False, "error": f"Terjadi kesalahan tak terduga: {str(e)}"}
@@ -216,7 +216,7 @@ tools = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "user_id": {"type": "integer", "description": "User ID dari talent."},
+                    "chat_user_id": {"type": "string", "description": "chat_user_id dari talent. formatnya id_user@nama_user"},
                     "talent_id": {"type": "integer", "description": "ID dari talent yang dihubungi."},
                     "talent_name": {"type": "string", "description": "Nama dari talent yang dihubungi."},
                     "job_opening_id": {"type": "integer", "description": "ID dari lowongan pekerjaan yang relevan."},

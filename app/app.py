@@ -174,7 +174,7 @@ def parse_user(user_field: str) -> User:
     name = name.strip()
     if not userid or not name:
         raise ValueError("userid atau nama tidak boleh kosong.")
-    return User(userid=userid, name=name)
+    return User(userid=user_field, name=user_field)
 
 # Mendapatkan atau membuat dokumen chat berdasarkan name
 # Kenapa name? Karena name adalah identitas unik pengguna dalam konteks ini.
@@ -198,12 +198,11 @@ def parse_user(user_field: str) -> User:
 def get_or_create_chat_doc(userid: str, name: str) -> dict:
     doc = users_chats.find_one({"name": name})
     if doc:
-        user_exists = users_chats.find_one({"name": name, "users": {"$elemMatch": {"userid": userid}}}) 
+        user_exists = users_chats.find_one({"name": name}) 
         if not user_exists:
             # Jika userid belum ada, tambahkan ke array 'users'
             users_chats.update_one(
                 {"name": name},
-                {"$push": {"users": {"userid": userid}}}
             )
         return users_chats.find_one({"name": name})
     
@@ -211,7 +210,6 @@ def get_or_create_chat_doc(userid: str, name: str) -> dict:
         # Dokumen tidak ditemukan, buat yang baru
         new_doc = {
             "name": name,
-            "users": [{"userid": userid}], # Mulai dengan userid pertama
             "sessions": []
         }
         users_chats.insert_one(new_doc)
