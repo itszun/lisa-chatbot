@@ -319,8 +319,8 @@ def list_candidates(page: int = 1, per_page: int = 10, search: Optional[str] = N
 def get_candidate_detail(candidate_id: int):
     return relogin_once_on_401(_get_detail, "candidates", candidate_id)
 
-def create_candidate(talent_id: int, job_opening_id: int, **kwargs):
-    payload = {"talent_id": talent_id, "job_opening_id": job_opening_id, **kwargs}
+def create_candidate(talent_id: int, job_opening_id: int, status: int = 1, **kwargs):
+    payload = {"talent_id": talent_id, "job_opening_id": job_opening_id, "status": status ,**kwargs}
     return relogin_once_on_401(_create_resource, "candidates", payload)
 
 def update_candidate(candidate_id: int, **kwargs):
@@ -421,3 +421,21 @@ def get_offer_details(candidate_id: int):
     Mengasumsikan endpoint di backend adalah /api/admin/offers/{candidate_id}
     """
     return relogin_once_on_401(_get_detail, "offers", candidate_id)
+
+
+# ===================== VECTOR RETRIEVAL ==================
+def retrieve_data(collection_name, search):
+    from vectordb import Chroma
+    print(f"Retrieve Data: search for \"{search}\" on \"{collection_name}\"")
+    try:
+        collection = Chroma().client().get_or_create_collection(name=collection_name)
+        results = collection.query(
+            query_texts=[search], # Chroma will embed this for you
+            n_results=2 # how many results to return
+        )
+        return results
+    except Exception as error:
+        print("Error Tools")
+        print(error)
+    else:
+        return "None"

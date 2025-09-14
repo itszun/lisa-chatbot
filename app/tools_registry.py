@@ -7,13 +7,13 @@ from typing import Optional
 
 # ===== Helper injection (tanpa import app.py untuk hindari circular) =====
 _helpers = {
-    "get_or_create_name_doc": None,
+    "get_or_create_chat_doc": None,
     "append_session": None,
     "DEFAULT_SYSTEM_PROMPT": "Anda adalah asisten AI."
 }
 
-def set_helpers(get_or_create_name_doc, append_session, default_system_prompt):
-    _helpers["get_or_create_name_doc"] = get_or_create_name_doc
+def set_helpers(get_or_create_chat_doc, append_session, default_system_prompt):
+    _helpers["get_or_create_chat_doc"] = get_or_create_chat_doc
     _helpers["append_session"] = append_session
     _helpers["DEFAULT_SYSTEM_PROMPT"] = default_system_prompt
 
@@ -30,7 +30,7 @@ from api_client import (
     # job-openings
     list_job_openings, get_job_opening_detail, create_job_opening, update_job_opening, delete_job_opening,
     # PEMBARUAN: Impor fungsi baru
-    get_offer_details,
+    get_offer_details, retrieve_data
 )
 
 
@@ -66,18 +66,18 @@ def prepare_talent_message(talent_id: int, talent_name: str, sender_name: str, p
         )
     }
 
-def start_chat_with_talent(talent_id: str, talent_name: str, initial_message: str):
+def start_chat_with_talent(user_id: str, initial_message: str):
     """
     Membuat sesi chat baru di MongoDB untuk seorang talent spesifik.
     Format nama dokumen akan menjadi 'id@nama_dengan_underscore'.
     """
     try:
-        if not _helpers["get_or_create_name_doc"] or not _helpers["append_session"]:
+        if not _helpers["get_or_create_chat_doc"] or not _helpers["append_session"]:
             return {"success": False, "error": "helpers belum diinisialisasi dari app.py"}
 
-        document_name = talent_name
+        document_name = user_id
 
-        _helpers["get_or_create_name_doc"](name=document_name, userid=str(talent_id))
+        _helpers["get_or_create_chat_doc"](name=document_name)
 
         new_session_id = str(uuid4())
         created_at = datetime.now(timezone.utc)
@@ -96,7 +96,7 @@ def start_chat_with_talent(talent_id: str, talent_name: str, initial_message: st
 
         return {
             "success": True,
-            "message": f"Sesi chat baru dengan {talent_name} berhasil dibuat.",
+            "message": f"Sesi chat baru dengan {document_name} berhasil dibuat.",
             "session_id": new_session_id
         }
     except Exception as e:
@@ -150,10 +150,11 @@ def list_job_openings_enriched(page: int = 1, per_page: int = 10, search: Option
     else:
         return enriched_data
     
-def initiate_contact(talent_id: int, talent_name: str, job_opening_id: int, initial_message: str):
+def initiate_contact(talent_id: int, user_id: int, talent_name: str, job_opening_id: int, initial_message: str):
     """
     Mendaftarkan talent sebagai kandidat untuk sebuah lowongan DAN memulai sesi chat baru.
     Ini adalah tool utama untuk kontak awal.
+    Membutuhkan user_id milik talent dgn format "id@user_name"
     """
     try:
         # Langkah 1: Daftarkan sebagai kandidat
@@ -162,11 +163,11 @@ def initiate_contact(talent_id: int, talent_name: str, job_opening_id: int, init
              return {"success": False, "error": f"Gagal membuat kandidat: {candidate_result['error']}"}
 
         # Langkah 2: Jika berhasil, mulai sesi chat
-        chat_result = start_chat_with_talent(talent_id=str(talent_id), talent_name=talent_name, initial_message=initial_message)
+        chat_result = start_chat_with_talent(user_id=user_id, initial_message=initial_message)
         if not chat_result.get("success"):
             return {"success": False, "error": f"Kandidat dibuat, tapi gagal memulai chat: {chat_result['error']}"}
 
-        return {"success": True, "message": f"Talent {talent_name} berhasil didaftarkan sebagai kandidat dan pesan pertama telah dikirim."}
+        return {"success": True, "message": f"Talent {user_id} berhasil didaftarkan sebagai kandidat dan pesan pertama telah dikirim."}
 
     except Exception as e:
         return {"success": False, "error": f"Terjadi kesalahan tak terduga: {str(e)}"}
@@ -177,11 +178,27 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "retrieve_data",
+            "description": "Gunakan tool ini untuk mendapatkan data terkait Job Opening, Talent, Company, User, dan Candidate",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "collection_name": {"type": "string", "description": "either talent_pool, job_openings, users, company, or candidates"},
+                    "search": {"type":"string", "description": "Any keyword to search. Using semantic search"}
+                }
+            },
+            "required": ["collection_name", "search"]
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "initiate_contact",
             "description": "Gunakan tool ini setelah pengguna menyetujui draf pesan untuk menghubungi talent. Tool ini akan mendaftarkan talent sebagai kandidat DAN memulai sesi chat.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "user_id": {"type": "integer", "description": "User ID dari talent."},
                     "talent_id": {"type": "integer", "description": "ID dari talent yang dihubungi."},
                     "talent_name": {"type": "string", "description": "Nama dari talent yang dihubungi."},
                     "job_opening_id": {"type": "integer", "description": "ID dari lowongan pekerjaan yang relevan."},
@@ -191,63 +208,63 @@ tools = [
             }
         }
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_job_openings_enriched",
-            "description": "Mencari dan menampilkan daftar lowongan pekerjaan, lengkap dengan nama perusahaan.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "page": {"type": "integer", "default": 1, "description": "Nomor halaman."},
-                    "per_page": {"type": "integer", "default": 10, "description": "Jumlah item per halaman."},
-                    "search": {"type": "string", "description": "Kata kunci pencarian untuk judul lowongan."}
-                }
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_offer_details",
-            "description": "Mengambil detail penawaran kerja (gaji, tunjangan, dll) untuk seorang kandidat berdasarkan ID kandidat.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "candidate_id": {"type": "integer", "description": "ID dari kandidat yang akan diperiksa penawarannya."}
-                },
-                "required": ["candidate_id"]
-            }
-        }
-    },
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "list_job_openings_enriched",
+    #         "description": "Mencari dan menampilkan daftar lowongan pekerjaan, lengkap dengan nama perusahaan.",
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "page": {"type": "integer", "default": 1, "description": "Nomor halaman."},
+    #                 "per_page": {"type": "integer", "default": 10, "description": "Jumlah item per halaman."},
+    #                 "search": {"type": "string", "description": "Kata kunci pencarian untuk judul lowongan."}
+    #             }
+    #         }
+    #     }
+    # },
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "get_offer_details",
+    #         "description": "Mengambil detail penawaran kerja (gaji, tunjangan, dll) untuk seorang kandidat berdasarkan ID kandidat.",
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "candidate_id": {"type": "integer", "description": "ID dari kandidat yang akan diperiksa penawarannya."}
+    #             },
+    #             "required": ["candidate_id"]
+    #         }
+    #     }
+    # },
     # ===== TALENT =====
-    {
-      "type": "function",
-      "function": {
-        "name": "list_talent",
-        "description": "List talents with optional search & pagination.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "page": {"type": "integer", "default": 1},
-            "per_page": {"type": "integer", "default": 10},
-            "search": {"type": "string"}
-          }
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "get_talent_detail",
-        "description": "Get a talent by ID.",
-        "parameters": {
-          "type": "object",
-          "properties": {"talent_id": {"type": "integer"}},
-          "required": ["talent_id"]
-        }
-      }
-    },
+    # {
+    #   "type": "function",
+    #   "function": {
+    #     "name": "list_talent",
+    #     "description": "List talents with optional search & pagination.",
+    #     "parameters": {
+    #       "type": "object",
+    #       "properties": {
+    #         "page": {"type": "integer", "default": 1},
+    #         "per_page": {"type": "integer", "default": 10},
+    #         "search": {"type": "string"}
+    #       }
+    #     }
+    #   }
+    # },
+    # {
+    #   "type": "function",
+    #   "function": {
+    #     "name": "get_talent_detail",
+    #     "description": "Get a talent by ID.",
+    #     "parameters": {
+    #       "type": "object",
+    #       "properties": {"talent_id": {"type": "integer"}},
+    #       "required": ["talent_id"]
+    #     }
+    #   }
+    # },
     {
       "type": "function",
       "function": {
@@ -321,33 +338,33 @@ tools = [
     },
 
     # ===== CANDIDATES =====
-    {
-      "type": "function",
-      "function": {
-        "name": "list_candidates",
-        "description": "List candidates.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "page": {"type": "integer", "default": 1},
-            "per_page": {"type": "integer", "default": 10},
-            "search": {"type": "string"}
-          }
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "get_candidate_detail",
-        "description": "Get candidate by ID.",
-        "parameters": {
-          "type": "object",
-          "properties": {"candidate_id": {"type": "integer"}},
-          "required": ["candidate_id"]
-        }
-      }
-    },
+    # {
+    #   "type": "function",
+    #   "function": {
+    #     "name": "list_candidates",
+    #     "description": "List candidates.",
+    #     "parameters": {
+    #       "type": "object",
+    #       "properties": {
+    #         "page": {"type": "integer", "default": 1},
+    #         "per_page": {"type": "integer", "default": 10},
+    #         "search": {"type": "string"}
+    #       }
+    #     }
+    #   }
+    # },
+    # {
+    #   "type": "function",
+    #   "function": {
+    #     "name": "get_candidate_detail",
+    #     "description": "Get candidate by ID.",
+    #     "parameters": {
+    #       "type": "object",
+    #       "properties": {"candidate_id": {"type": "integer"}},
+    #       "required": ["candidate_id"]
+    #     }
+    #   }
+    # },
     {
       "type": "function",
       "function": {
@@ -401,33 +418,33 @@ tools = [
     },
 
     # ===== COMPANIES =====
-    {
-      "type": "function",
-      "function": {
-        "name": "list_companies",
-        "description": "List companies.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "page": {"type": "integer", "default": 1},
-            "per_page": {"type": "integer", "default": 10},
-            "search": {"type": "string"}
-          }
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "get_company_detail",
-        "description": "Get company by ID.",
-        "parameters": {
-          "type": "object",
-          "properties": {"company_id": {"type": "integer"}},
-          "required": ["company_id"]
-        }
-      }
-    },
+    # {
+    #   "type": "function",
+    #   "function": {
+    #     "name": "list_companies",
+    #     "description": "List companies.",
+    #     "parameters": {
+    #       "type": "object",
+    #       "properties": {
+    #         "page": {"type": "integer", "default": 1},
+    #         "per_page": {"type": "integer", "default": 10},
+    #         "search": {"type": "string"}
+    #       }
+    #     }
+    #   }
+    # },
+    # {
+    #   "type": "function",
+    #   "function": {
+    #     "name": "get_company_detail",
+    #     "description": "Get company by ID.",
+    #     "parameters": {
+    #       "type": "object",
+    #       "properties": {"company_id": {"type": "integer"}},
+    #       "required": ["company_id"]
+    #     }
+    #   }
+    # },
     {
       "type": "function",
       "function": {
@@ -475,33 +492,33 @@ tools = [
     },
 
     # ===== COMPANY PROPERTIES =====
-    {
-      "type": "function",
-      "function": {
-        "name": "list_company_properties",
-        "description": "List company properties.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "page": {"type": "integer", "default": 1},
-            "per_page": {"type": "integer", "default": 10},
-            "search": {"type": "string"}
-          }
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "get_company_property_detail",
-        "description": "Get company property by ID.",
-        "parameters": {
-          "type": "object",
-          "properties": {"prop_id": {"type": "integer"}},
-          "required": ["prop_id"]
-        }
-      }
-    },
+    # {
+    #   "type": "function",
+    #   "function": {
+    #     "name": "list_company_properties",
+    #     "description": "List company properties.",
+    #     "parameters": {
+    #       "type": "object",
+    #       "properties": {
+    #         "page": {"type": "integer", "default": 1},
+    #         "per_page": {"type": "integer", "default": 10},
+    #         "search": {"type": "string"}
+    #       }
+    #     }
+    #   }
+    # },
+    # {
+    #   "type": "function",
+    #   "function": {
+    #     "name": "get_company_property_detail",
+    #     "description": "Get company property by ID.",
+    #     "parameters": {
+    #       "type": "object",
+    #       "properties": {"prop_id": {"type": "integer"}},
+    #       "required": ["prop_id"]
+    #     }
+    #   }
+    # },
     {
       "type": "function",
       "function": {
@@ -549,19 +566,19 @@ tools = [
     },
 
     # ===== JOB OPENINGS =====
-    {
-      "type": "function",
-      "function": {
-        "name": "list_job_openings",
-        "description": "List job openings.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "search": {"type": "string"}
-          }
-        }
-      }
-    },
+    # {
+    #   "type": "function",
+    #   "function": {
+    #     "name": "list_job_openings",
+    #     "description": "List job openings.",
+    #     "parameters": {
+    #       "type": "object",
+    #       "properties": {
+    #         "search": {"type": "string"}
+    #       }
+    #     }
+    #   }
+    # },
     {
       "type": "function",
       "function": {
@@ -628,31 +645,32 @@ tools = [
 # ========== MAPPING FUNGSI ==========
 available_functions = {
     "initiate_contact": initiate_contact,
-    "get_offer_details": get_offer_details,
-    "list_job_openings_enriched": list_job_openings_enriched, 
-    "list_talent": list_talent,
-    "get_talent_detail": get_talent_detail,
+    # "get_offer_details": get_offer_details,
+    # "list_job_openings_enriched": list_job_openings_enriched, 
+    # "list_talent": list_talent,
+    # "get_talent_detail": get_talent_detail,
     "create_talent": create_talent,
     "update_talent": update_talent,
     "delete_talent": delete_talent,
-    "list_candidates": list_candidates,
-    "get_candidate_detail": get_candidate_detail,
+    # "list_candidates": list_candidates,
+    # "get_candidate_detail": get_candidate_detail,
     "create_candidate": create_candidate,
     "update_candidate": update_candidate,
     "delete_candidate": delete_candidate,
-    "list_companies": list_companies,
-    "get_company_detail": get_company_detail,
+    # "list_companies": list_companies,
+    # "get_company_detail": get_company_detail,
     "create_company": create_company,
     "update_company": update_company,
     "delete_company": delete_company,
-    "list_company_properties": list_company_properties,
-    "get_company_property_detail": get_company_property_detail,
+    # "list_company_properties": list_company_properties,
+    # "get_company_property_detail": get_company_property_detail,
     "create_company_property": create_company_property,
     "update_company_property": update_company_property,
     "delete_company_property": delete_company_property,
-    "list_job_openings": list_job_openings,
-    "get_job_opening_detail": get_job_opening_detail,
+    # "list_job_openings": list_job_openings,
+    # "get_job_opening_detail": get_job_opening_detail,
     "create_job_opening": create_job_opening,
     "update_job_opening": update_job_opening,
     "delete_job_opening": delete_job_opening,
+    "retrieve_data": retrieve_data,
 }

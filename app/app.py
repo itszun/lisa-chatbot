@@ -122,13 +122,11 @@ DEFAULT_SYSTEM_PROMPT = (
 
     "SOP (Standard Operating Procedure) SAAT MENGHUBUNGI TALENT: "
     "Saat pengguna meminta untuk mengirim pesan ke seorang talent dari sebuah perusahaan, IKUTI LANGKAH-LANGKAH BERIKUT SECARA BERURUTAN: "
-    "LANGKAH 1: IDENTIFIKASI INFORMASI (NAMA TALENT, ID TALENT, NAMA PERUSAHAAN PENGIRIM). "
-    "LANGKAH 2: CARI LOWONGAN RELEVAN menggunakan `list_job_openings_enriched`. Sangat penting untuk mendapatkan `job_opening_id` dari langkah ini. Jika ada beberapa pilihan, tanyakan kepada pengguna mana yang akan digunakan. "
-    "LANGKAH 3: CARI KEAHLIAN TALENT menggunakan `get_talent_detail`. "
-    "LANGKAH 4: ANALISIS & BUAT DRAF PESAN yang spesifik merujuk pada lowongan yang ditemukan di Langkah 2. "
-    "LANGKAH 5: MINTA KONFIRMASI pengguna (gunakan tool `prepare_talent_message` jika ada, atau tanyakan langsung). "
-    "LANGKAH 6: TUNGGU PERSETUJUAN (misal: 'Ya' atau 'Kirim'). "
-    "LANGKAH 7: EKSEKUSI. Setelah disetujui, GUNAKAN tool `initiate_contact`. Pastikan Anda menyertakan `talent_id`, `talent_name`, `job_opening_id` yang relevan, dan `initial_message`."
+    "LANGKAH 1: IDENTIFIKASI INFORMASI (NAMA TALENT, ID TALENT, NAMA PERUSAHAAN PENGIRIM) manfaatkan retrive_data tools"
+    "LANGKAH 2: ANALISIS & BUAT DRAF PESAN yang spesifik merujuk pada lowongan yang ditemukan di Langkah 1. "
+    "LANGKAH 3: MINTA KONFIRMASI pengguna (gunakan tool `prepare_talent_message` jika ada, atau tanyakan langsung). "
+    "LANGKAH 4: TUNGGU PERSETUJUAN (misal: 'Ya' atau 'Kirim'). "
+    "LANGKAH 5: EKSEKUSI. Setelah disetujui, GUNAKAN tool `initiate_contact`. Pastikan Anda menyertakan `user_id`, `talent_id`, `talent_name`, `job_opening_id` yang relevan, dan `initial_message`."
 
     "SOP (Standard Operating Procedure) SAAT MENGIRIM PENAWARAN KERJA (JOB OFFER): "
     "Saat pengguna meminta untuk 'mengirim penawaran' atau 'memberikan offering letter', IKUTI LANGKAH-LANGKAH BERIKUT: "
@@ -272,7 +270,7 @@ def create_session():
     if not mongo_client:
         return jsonify({"error": "MongoDB tidak tersedia"}), 500
 
-    _ = get_or_create_chat_doc(userid=userid, name=name)
+    _ = get_or_create_chat_doc(name=name)
     new_sid = str(uuid4())
     created_at = datetime.now(timezone.utc)
     default_title = "Percakapan Baru"
