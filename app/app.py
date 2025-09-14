@@ -1,5 +1,8 @@
 # app.py (Versi Final Tanpa Validasi Awal)
 # -*- coding: utf-8 -*-
+from feeder import Feeder
+from tools_registry import tools as TOOLS_SPEC, available_functions as AVAILABLE_FUNCS, set_helpers
+from dataclasses import dataclass
 import os
 import json
 import time
@@ -62,13 +65,16 @@ except Exception as e:
 # ======================================================================
 
 # Struktur data untuk menyimpan info user
-from dataclasses import dataclass
+
+
 @dataclass
 class User:
     userid: str
     name: str
 
 # Fungsi untuk mengurai field user
+
+
 def parse_user(user_field: str) -> User:
     """Mengurai 'userid@name' dan mengembalikan objek User yang rapi."""
     if not user_field or "@" not in user_field:
@@ -80,17 +86,18 @@ def parse_user(user_field: str) -> User:
         raise ValueError("userid atau nama tidak boleh kosong.")
     return User(userid=user_field, name=user_field)
 
+
 def get_or_create_chat_doc(name: str, **kwargs) -> dict:
     doc = users_chats.find_one({"name": name})
     if doc:
-        user_exists = users_chats.find_one({"name": name}) 
+        user_exists = users_chats.find_one({"name": name})
         if not user_exists:
             # Jika userid belum ada, tambahkan ke array 'users'
             users_chats.update_one(
                 {"name": name},
             )
         return users_chats.find_one({"name": name})
-    
+
     else:
         # Dokumen tidak ditemukan, buat yang baru
         new_doc = {
@@ -102,6 +109,8 @@ def get_or_create_chat_doc(name: str, **kwargs) -> dict:
 
 # Mencari sesi dalam dokumen berdasarkan session_id
 # Kembalikan sesi yang ditemukan atau None.
+
+
 def find_session(doc: dict, session_id: str) -> Optional[dict]:
     for s in (doc.get("sessions") or []):
         if s.get("session_id") == session_id:
@@ -110,6 +119,8 @@ def find_session(doc: dict, session_id: str) -> Optional[dict]:
 
 # Memperbarui pesan dalam sesi yang ada di mongo berdasarkan name dan session_id
 # Gunakan 'name' sebagai kunci utama.
+
+
 def upsert_session_messages(name: str, session_id: str, messages: List[dict]) -> None:
     users_chats.update_one(
         {"name": name, "sessions.session_id": session_id},
@@ -118,6 +129,8 @@ def upsert_session_messages(name: str, session_id: str, messages: List[dict]) ->
 
 # Menambahkan sesi baru
 # Gunakan 'name' sebagai kunci utama.
+
+
 def append_session(name: str, session_id: str, created_at: datetime, messages: List[dict], title: str) -> None:
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
@@ -130,11 +143,14 @@ def append_session(name: str, session_id: str, created_at: datetime, messages: L
     )
 
 # Ekstrak token Bearer dari header Authorization
+
+
 def _extract_bearer_token(req) -> str:
     auth = (req.headers.get("Authorization") or "").strip()
     if auth.lower().startswith("bearer "):
         return auth.split(" ", 1)[1].strip()
     return ""
+
 
 # ======================================================================
 # IMPORT TOOLS + INJEKSI HELPER
@@ -143,36 +159,33 @@ def _extract_bearer_token(req) -> str:
 # untuk mengakses fungsi get_or_create_chat_doc dan append_session
 # tanpa membuat dependensi melingkar.
 # kenapa? Karena tools_registry.py perlu mengakses MongoDB
-from tools_registry import tools as TOOLS_SPEC, available_functions as AVAILABLE_FUNCS, set_helpers
-set_helpers(get_or_create_chat_doc, append_session, TemplatePrompt.DEFAULT_SYSTEM_PROMPT)
+set_helpers(get_or_create_chat_doc, append_session,
+            TemplatePrompt.DEFAULT_SYSTEM_PROMPT)
 
 # ======================================================================
-# ROUTES 
+# ROUTES
 # ======================================================================
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
+
 
 @app.route("/api/sessions", methods=["GET"])
 def list_sessions():
     try:
         incoming_token = _extract_bearer_token(request)
-        if incoming_token: ensure_token(preferred_token=incoming_token)
+        if incoming_token:
+            ensure_token(preferred_token=incoming_token)
     except Exception as e:
         return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
 
     user_field = (request.args.get("user") or "").strip()
-    try:
-        user_chat=parse_user(user_field)
-    except ValueError as ve:
-        return jsonify({"error": str(ve)}), 400
-
-    if not mongo_client:
-        return jsonify({"error": "MongoDB tidak tersedia"}), 500
 
     # PANGGIL DENGAN DUA PARAMETER
-    doc = get_or_create_chat_doc(userid=user_chat.name, name=user_chat.name)
-    
+    doc = get_or_create_chat_doc(name=user_field)
+
     sessions = []
     for s in doc.get("sessions", []):
         created = s.get("created_at")
@@ -185,32 +198,28 @@ def list_sessions():
         })
     sessions.sort(key=lambda x: x.get("created_at") or "", reverse=True)
 
-    return jsonify({"name": user_chat.name, "sessions": sessions})
+    return jsonify({"name": user_field, "sessions": sessions})
+
 
 @app.route("/api/sessions", methods=["POST"])
 def create_session():
     data = request.get_json(force=True)
     try:
         incoming_token = _extract_bearer_token(request)
-        if incoming_token: ensure_token(preferred_token=incoming_token)
+        if incoming_token:
+            ensure_token(preferred_token=incoming_token)
     except Exception as e:
         return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
 
     user_field = (data.get("user") or "").strip()
-    system_prompt = data.get("system_prompt") or TemplatePrompt.DEFAULT_SYSTEM_PROMPT
-    try:
-        user_chat = parse_user(user_field)
-    except ValueError as ve:
-        return jsonify({"error": str(ve)}), 400
+    system_prompt = data.get(
+        "system_prompt") or TemplatePrompt.DEFAULT_SYSTEM_PROMPT
 
-    personalized_greeting = f"Hai {user_chat.name}, adakah yang bisa saya bantu?"
-    
-    if not mongo_client:
-        return jsonify({"error": "MongoDB tidak tersedia"}), 500
+    personalized_greeting = f"Hai {user_field}, adakah yang bisa saya bantu?"
 
     # PANGGIL DENGAN DUA PARAMETER
-    _ = get_or_create_chat_doc(userid=user_chat.name, name=user_chat.name)
-    
+    _ = get_or_create_chat_doc(name=user_field)
+
     new_sid = str(uuid4())
     created_at = datetime.now(timezone.utc)
     default_title = "Percakapan Baru"
@@ -218,17 +227,17 @@ def create_session():
         {"role": "system", "content": system_prompt},
         {"role": "assistant", "content": personalized_greeting},
     ]
-    
+
     # PANGGIL DENGAN NAME
     append_session(
-        name=user_chat.name,
+        name=user_field,
         session_id=new_sid,
         created_at=created_at,
         messages=messages,
         title=default_title
     )
     return jsonify({
-        "name": user_chat.name,
+        "name": user_field,
         "session_id": new_sid,
         "title": default_title,
         "created_at": created_at.isoformat()
@@ -241,7 +250,8 @@ def chat():
     data = request.get_json(force=True)
     try:
         incoming_token = _extract_bearer_token(request)
-        if incoming_token: ensure_token(preferred_token=incoming_token)
+        if incoming_token:
+            ensure_token(preferred_token=incoming_token)
     except Exception as e:
         return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
 
@@ -252,32 +262,32 @@ def chat():
     if not user_field or not user_msg:
         return jsonify({"error": "Input tidak lengkap (membutuhkan user dan message)."}), 400
 
-    if not mongo_client:
-        return jsonify({"error": "MongoDB tidak tersedia"}), 500
-
-    # PANGGIL DENGAN DUA PARAMETER
     doc = get_or_create_chat_doc(name=user_field)
 
     is_new_session = not session_id
     messages_full: List[dict] = []
-    
+
     if is_new_session:
         session_id = str(uuid4())
         prompt = ContextDefiner(
-            chat_user_id=user_field, 
+            chat_user_id=user_field,
             user_message=user_msg,
             session_id=session_id,
-            ).getSystemPrompt()
+        ).getSystemPrompt()
         messages_full = [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": user_msg}
+            {"role": "system", "content": prompt,
+                "timestamp": str(datetime.now())},
+            {"role": "user", "content": user_msg,
+                "timestamp": str(datetime.now())}
         ]
     else:
         sess = find_session(doc, session_id)
         if not sess:
             return jsonify({"error": f"session_id '{session_id}' tidak ditemukan."}), 404
         messages_full = sess.get("messages", [])
-        messages_full.append({"role": "user", "content": user_msg})
+        messages_full.append(
+            {"role": "user", "content": user_msg, "timestamp": str(datetime.now())})
+
     def _ctx_slice(msgs: List[dict]) -> List[dict]:
         if len(msgs) > MAX_HISTORY_MESSAGES:
             return [msgs[0]] + msgs[-MAX_HISTORY_MESSAGES:]
@@ -294,7 +304,11 @@ def chat():
         )
         resp_msg = first.choices[0].message
         message_dict = resp_msg.model_dump()
-        messages_full.append(message_dict)
+        timestamp = str(datetime.now())
+        messages_full.append({
+            **message_dict,
+            "timestamp": timestamp
+        })
         final_text = message_dict["content"]
         tool_calls = resp_msg.tool_calls
 
@@ -304,12 +318,17 @@ def chat():
                 fargs = json.loads(tc.function.arguments or "{}")
                 out = AVAILABLE_FUNCS[fname](**fargs)
                 result_json = json.dumps(out, ensure_ascii=False)
-                tool_runs.append({"name": fname, "args": fargs, "result": json.loads(result_json)})
-                messages_full.append({"role": "tool", "tool_call_id": tc.id, "name": fname, "content": result_json})
-            
-            second = client.chat.completions.create(model="gpt-4o", messages=_ctx_slice(messages_full), temperature=0.2)
+                tool_runs.append(
+                    {"name": fname, "args": fargs, "result": json.loads(result_json)})
+                messages_full.append({"role": "tool", "tool_call_id": tc.id, "name": fname,
+                                     "content": result_json, "timestamp": str(datetime.now())})
+
+            second = client.chat.completions.create(
+                model="gpt-4o", messages=_ctx_slice(messages_full), temperature=0.2)
             final_text = second.choices[0].message.content or ""
-            messages_full.append({"role": "assistant", "content": final_text})
+            timestamp = str(datetime.now())
+            messages_full.append(
+                {"role": "assistant", "content": final_text, "timestamp": timestamp})
 
     except Exception as e:
         traceback.print_exc()
@@ -321,15 +340,18 @@ def chat():
             model="gpt-4o", messages=[{"role": "user", "content": f"Buat judul singkat (maksimal 5 kata) untuk percakapan yang diawali dengan: '{history}'"}],
             temperature=0.2, max_tokens=20
         ).choices[0].message.content or "Percakapan Baru").strip().replace('"', '')
-        append_session(name=user_field, session_id=session_id, created_at=datetime.now(timezone.utc), messages=messages_full, title=title),
+        append_session(name=user_field, session_id=session_id, created_at=datetime.now(
+            timezone.utc), messages=messages_full, title=title),
     else:
-        upsert_session_messages(name=user_field, session_id=session_id, messages=messages_full)
-    
+        upsert_session_messages(
+            name=user_field, session_id=session_id, messages=messages_full)
+
     response_data = {
         "user": user_field,
         "session_id": session_id,
         "answer": final_text,
-        "tool_runs": tool_runs
+        "tool_runs": tool_runs,
+        "timestamp": timestamp
     }
 
     if is_new_session:
@@ -337,11 +359,13 @@ def chat():
 
     return jsonify(response_data)
 
+
 @app.get("/api/session/messages")
 def get_session_messages():
     try:
         incoming_token = _extract_bearer_token(request)
-        ensure_token(preferred_token=incoming_token if incoming_token else None)
+        ensure_token(
+            preferred_token=incoming_token if incoming_token else None)
     except Exception as e:
         return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
 
@@ -349,34 +373,24 @@ def get_session_messages():
     session_id = (request.args.get("session_id") or "").strip()
     if not user_field or not session_id:
         return jsonify({"error": "Parameter 'user' dan 'session_id' wajib diisi."}), 400
-    
-    try:
-        # GUNAKAN PARSE_USER
-        user_obj = parse_user(user_field)
-    except ValueError as ve:
-        return jsonify({"error": str(ve)}), 400
 
-    if not mongo_client:
-        return jsonify({"error": "MongoDB tidak tersedia"}), 500
-    
     # CARI DENGAN NAME
-    doc = users_chats.find_one({"name": user_obj.name})
+    doc = users_chats.find_one({"name": user_field})
     if not doc:
-        return jsonify({"error": f"Nama '{user_obj.name}' belum terdaftar."}), 404
-        
+        return jsonify({"error": f"Nama '{user_field}' belum terdaftar."}), 404
+
     sess = find_session(doc, session_id)
     if not sess:
-        return jsonify({"error": f"session_id '{session_id}' tidak ditemukan untuk nama '{user_obj.name}'."}), 404
-    
+        return jsonify({"error": f"session_id '{session_id}' tidak ditemukan untuk nama '{user_field}'."}), 404
+
     msgs = sess.get("messages", []) or []
     return jsonify({
-        "name": doc.get("name", user_obj.name),
+        "name": doc.get("name", user_field),
         "session_id": session_id,
         "messages": msgs
     })
 
 
-from feeder import Feeder
 @app.post("/api/feeder/talents")
 def feed_talent():
     payload = request.json
@@ -386,10 +400,10 @@ def feed_talent():
         print(payload['data'])
         raise e
 
-
     return jsonify({
         "status": "success"
     })
+
 
 @app.post("/api/feeder/companies")
 def feed_job_company():
@@ -404,6 +418,7 @@ def feed_job_company():
         "status": "success"
     })
 
+
 @app.post("/api/feeder/candidates")
 def feed_job_candidate():
     payload = request.json
@@ -412,6 +427,7 @@ def feed_job_candidate():
     return jsonify({
         "status": "success"
     })
+
 
 @app.post("/api/feeder/job_openings")
 def feed_job_opening():
@@ -435,6 +451,7 @@ def feed_job_user():
         "status": "success"
     })
 
+
 @app.post("/api/feeder/clean")
 def clean_feeder():
     Feeder().clean()
@@ -447,4 +464,5 @@ def clean_feeder():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     host = os.environ.get("HOST", "127.0.0.1")
-    app.run(host=host, port=port, debug=True, use_reloader=False, threaded=True)
+    app.run(host=host, port=port, debug=True,
+            use_reloader=False, threaded=True)
