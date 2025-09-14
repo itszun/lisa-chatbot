@@ -63,6 +63,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "Saat menampilkan daftar (seperti daftar talent), selalu gunakan format daftar bernomor (1., 2., 3., dst) dengan setiap item di baris baru agar rapi dan mudah dibaca."
     "PENTING: JANGAN PERNAH menampilkan data mentah JSON. Selalu interpretasikan dan sajikan dalam kalimat yang mudah dibaca."
     "JANGAN GUNAKAN FORMAT MARKDOWN seperti **bold** atau - untuk list. Gunakan kalimat biasa atau daftar bernomor."
+    "ATURAN PENGGUNAAN TOOLS: Jika Anda perlu menggunakan tool yang membutuhkan parameter wajib (seperti 'search'), namun Anda tidak dapat menemukan nilainya dari pesan pengguna, Anda WAJIB bertanya kembali kepada pengguna untuk informasi tersebut. Contoh: 'Tentu, data spesifik apa yang ingin Anda cari?'"
 
     # --- BARU: ATURAN KEAMANAN DAN KONFIRMASI ---
     "ATURAN KESELAMATAN UTAMA: Untuk semua tindakan yang bersifat merusak atau mengubah data secara permanen (`delete_*`, `update_*`), Anda WAJIB meminta konfirmasi eksplisit dari pengguna sebelum menjalankan tool. "
@@ -155,7 +156,14 @@ DEFAULT_SYSTEM_PROMPT = (
 # ======================================================================
 # UTILITAS
 # ======================================================================
-def parse_user(user_field: str) -> Tuple[str, str]:
+from dataclasses import dataclass
+@dataclass
+class User:
+    userid: str
+    name: str
+
+def parse_user(user_field: str) -> User:
+    """Mengurai 'userid@name' dan mengembalikan objek User yang rapi."""
     if not user_field or "@" not in user_field:
         raise ValueError("Format user harus 'userid@nama'.")
     userid, name = user_field.split("@", 1)
@@ -163,17 +171,32 @@ def parse_user(user_field: str) -> Tuple[str, str]:
     name = name.strip()
     if not userid or not name:
         raise ValueError("userid atau nama tidak boleh kosong.")
-    return userid, name
+    return User(userid=userid, name=name)
 
-def get_or_create_chat_doc(name: str) -> dict:
-    # --- PERBAIKAN DI SINI ---
-    # Fungsi ini sekarang HANYA menerima 'name'
+def get_or_create_chat_doc(userid: str, name: str) -> dict:
+    # Mencari dokumen hanya berdasarkan nama
     doc = users_chats.find_one({"name": name})
+
     if doc:
-        return doc
-    new_doc = {"name": name, "sessions": []}
-    users_chats.insert_one(new_doc)
-    return users_chats.find_one({"name": name})
+        user_exists = users_chats.find_one({"name": name, "users": {"$elemMatch": {"userid": userid}}})
+        
+        if not user_exists:
+            # Jika userid belum ada, tambahkan ke array 'users'
+            users_chats.update_one(
+                {"name": name},
+                {"$push": {"users": {"userid": userid}}}
+            )
+        return users_chats.find_one({"name": name})
+    
+    else:
+        # Dokumen tidak ditemukan, buat yang baru
+        new_doc = {
+            "name": name,
+            "users": [{"userid": userid}], # Mulai dengan userid pertama
+            "sessions": []
+        }
+        users_chats.insert_one(new_doc)
+        return users_chats.find_one({"name": name})
 
 def find_session(doc: dict, session_id: str) -> Optional[dict]:
     for s in (doc.get("sessions") or []):
@@ -181,12 +204,14 @@ def find_session(doc: dict, session_id: str) -> Optional[dict]:
             return s
     return None
 
+# Memperbarui pesan dalam sesi yang ada di mongo berdasarkan name dan session_id
 def upsert_session_messages(name: str, session_id: str, messages: List[dict]) -> None:
     users_chats.update_one(
         {"name": name, "sessions.session_id": session_id},
         {"$set": {"sessions.$.messages": messages}}
     )
 
+# Menambahkan sesi baru
 def append_session(name: str, session_id: str, created_at: datetime, messages: List[dict], title: str) -> None:
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
@@ -203,7 +228,58 @@ def _extract_bearer_token(req) -> str:
     if auth.lower().startswith("bearer "):
         return auth.split(" ", 1)[1].strip()
     return ""
-   
+#===============CHAT WITH TALENT TOOL==================================
+_helpers = {
+    "get_or_create_name_doc": None,
+    "append_session": None,
+    "DEFAULT_SYSTEM_PROMPT": "Anda adalah asisten AI."
+}
+
+def set_helpers(get_or_create_name_doc, append_session, default_system_prompt):
+    _helpers["get_or_create_name_doc"] = get_or_create_name_doc
+    _helpers["append_session"] = append_session
+    _helpers["DEFAULT_SYSTEM_PROMPT"] = default_system_prompt
+
+def start_chat_with_talent(talent_id: str, talent_name: str, initial_message: str):
+    """
+    Membuat sesi chat baru di MongoDB untuk seorang talent spesifik.
+    """
+    try:
+        # Pengecekan helper, pastikan sudah diinisialisasi
+        if not _helpers["get_or_create_name_doc"] or not _helpers["append_session"]:
+            return {"success": False, "error": "helpers belum diinisialisasi dari app.py"}
+
+        _helpers["get_or_create_name_doc"](
+            userid=str(talent_id), 
+            name=talent_name
+        )
+
+        new_session_id = str(uuid4())
+        created_at = datetime.now(timezone.utc)
+        messages = [
+            {"role": "system", "content": _helpers["DEFAULT_SYSTEM_PROMPT"]},
+            {"role": "assistant", "content": initial_message},
+        ]
+
+        # Panggil append_session dengan 'name' sesuai model data kita
+        _helpers["append_session"](
+            name=talent_name,
+            session_id=new_session_id,
+            created_at=created_at,
+            messages=messages,
+            title="Percakapan Awal"
+        )
+
+        return {
+            "success": True,
+            "message": f"Sesi chat baru dengan {talent_name} berhasil dibuat.",
+            "session_id": new_session_id
+        }
+    except Exception as e:
+        print(f"!!! ERROR di dalam TOOL start_chat_with_talent: {e}")
+        return {"success": False, "error": str(e)}
+#======================================================================  
+
 # ======================================================================
 # IMPORT TOOLS + INJEKSI HELPER
 # ======================================================================
@@ -217,6 +293,7 @@ set_helpers(get_or_create_chat_doc, append_session, DEFAULT_SYSTEM_PROMPT)
 def index():
     return render_template("index.html")
 
+# ====================MENDAPATKAN DAFTAR SESI DARI CHAT==================================================
 @app.route("/api/sessions", methods=["GET"])
 def list_sessions():
     try:
@@ -227,14 +304,16 @@ def list_sessions():
 
     user_field = (request.args.get("user") or "").strip()
     try:
-        name = user_field
+        user_chat=parse_user(user_field)
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
 
     if not mongo_client:
         return jsonify({"error": "MongoDB tidak tersedia"}), 500
 
-    doc = get_or_create_chat_doc(name=name)
+    # PANGGIL DENGAN DUA PARAMETER
+    doc = get_or_create_chat_doc(userid=user_chat.userid, name=user_chat.name)
+    
     sessions = []
     for s in doc.get("sessions", []):
         created = s.get("created_at")
@@ -246,7 +325,9 @@ def list_sessions():
             "messages_count": len(s.get("messages") or [])
         })
     sessions.sort(key=lambda x: x.get("created_at") or "", reverse=True)
-    return jsonify({"name": name, "sessions": sessions})
+
+#GUNAKANN USER_CHAT.NAME UNTUK MENDAPATKAN RESPONSE
+    return jsonify({"name": user_chat.name, "sessions": sessions})
 
 @app.route("/api/sessions", methods=["POST"])
 def create_session():
@@ -260,17 +341,19 @@ def create_session():
     user_field = (data.get("user") or "").strip()
     system_prompt = data.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
     try:
-        userid, name = parse_user(user_field)
+        # GUNAKAN PARSE_USER
+        user_chat = parse_user(user_field)
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
 
-    # Sapaan disederhanakan karena tidak ada user_type
-    personalized_greeting = f"Hai {name}, adakah yang bisa saya bantu?"
+    personalized_greeting = f"Hai {user_chat.name}, adakah yang bisa saya bantu?"
     
     if not mongo_client:
         return jsonify({"error": "MongoDB tidak tersedia"}), 500
 
-    _ = get_or_create_chat_doc(name=name)
+    # PANGGIL DENGAN DUA PARAMETER
+    _ = get_or_create_chat_doc(userid=user_chat.userid, name=user_chat.name)
+    
     new_sid = str(uuid4())
     created_at = datetime.now(timezone.utc)
     default_title = "Percakapan Baru"
@@ -278,20 +361,22 @@ def create_session():
         {"role": "system", "content": system_prompt},
         {"role": "assistant", "content": personalized_greeting},
     ]
+    
+    # PANGGIL DENGAN NAME
     append_session(
-        userid=userid,
+        name=user_chat.name,
         session_id=new_sid,
         created_at=created_at,
         messages=messages,
         title=default_title
     )
     return jsonify({
-        "name": name,
+        "name": user_chat.name,
         "session_id": new_sid,
         "title": default_title,
         "created_at": created_at.isoformat()
     })
- 
+
 @app.route("/api/chat", methods=["POST"])
 def chat():
     data = request.get_json(force=True)
@@ -301,38 +386,40 @@ def chat():
     except Exception as e:
         return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
 
-    user_name = (data.get("user") or "").strip()
+    user_field = (data.get("user") or "").strip()
     user_msg = (data.get("message") or "").strip()
     session_id = data.get("session_id")
 
-    if not user_name or not user_msg:
+    if not user_field or not user_msg:
         return jsonify({"error": "Input tidak lengkap (membutuhkan user dan message)."}), 400
+
+    try:
+        # GUNAKAN PARSE_USER DI SINI
+        user_chat = parse_user(user_field)
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
 
     if not mongo_client:
         return jsonify({"error": "MongoDB tidak tersedia"}), 500
+
+    # PANGGIL DENGAN DUA PARAMETER
+    doc = get_or_create_chat_doc(userid=user_chat.userid, name=user_chat.name)
 
     is_new_session = not session_id
     messages_full: List[dict] = []
     
     if is_new_session:
         session_id = str(uuid4())
-        # --- PERBAIKAN DI SINI ---
-        # Panggilan ini sekarang cocok dengan definisinya
-        get_or_create_chat_doc(name=user_name)
         messages_full = [
             {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
             {"role": "user", "content": user_msg}
         ]
     else:
-        doc = users_chats.find_one({"name": user_name})
-        if not doc:
-            return jsonify({"error": f"User '{user_name}' belum memulai percakapan."}), 404
         sess = find_session(doc, session_id)
         if not sess:
             return jsonify({"error": f"session_id '{session_id}' tidak ditemukan."}), 404
         messages_full = sess.get("messages", [])
         messages_full.append({"role": "user", "content": user_msg})
-
     def _ctx_slice(msgs: List[dict]) -> List[dict]:
         if len(msgs) > MAX_HISTORY_MESSAGES:
             return [msgs[0]] + msgs[-MAX_HISTORY_MESSAGES:]
@@ -340,6 +427,7 @@ def chat():
 
     tool_runs = []
     final_text = ""
+
     try:
         ctx_messages = _ctx_slice(messages_full)
         first = client.chat.completions.create(
@@ -375,16 +463,17 @@ def chat():
             model="gpt-4o", messages=[{"role": "user", "content": f"Buat judul singkat (maksimal 5 kata) untuk percakapan yang diawali dengan: '{user_msg}'"}],
             temperature=0.2, max_tokens=20
         ).choices[0].message.content or "Percakapan Baru").strip().replace('"', '')
-        append_session(name=user_name, session_id=session_id, created_at=datetime.now(timezone.utc), messages=messages_full, title=title)
+        append_session(name=user_chat.name, session_id=session_id, created_at=datetime.now(timezone.utc), messages=messages_full, title=title),
     else:
-        upsert_session_messages(name=user_name, session_id=session_id, messages=messages_full)
+        upsert_session_messages(name=user_chat.name, session_id=session_id, messages=messages_full)
     
     response_data = {
-        "user": user_name,
+        "user": user_field,
         "session_id": session_id,
         "answer": final_text,
         "tool_runs": tool_runs
     }
+
     if is_new_session:
         response_data["new_session_id"] = session_id
 
@@ -397,25 +486,33 @@ def get_session_messages():
         ensure_token(preferred_token=incoming_token if incoming_token else None)
     except Exception as e:
         return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
+
     user_field = (request.args.get("user") or "").strip()
     session_id = (request.args.get("session_id") or "").strip()
     if not user_field or not session_id:
         return jsonify({"error": "Parameter 'user' dan 'session_id' wajib diisi."}), 400
+    
     try:
-        name = user_field
+        # GUNAKAN PARSE_USER
+        user_obj = parse_user(user_field)
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 400
+
     if not mongo_client:
         return jsonify({"error": "MongoDB tidak tersedia"}), 500
-    doc = users_chats.find_one({"name": name})
+    
+    # CARI DENGAN NAME
+    doc = users_chats.find_one({"name": user_obj.name})
     if not doc:
-        return jsonify({"error": f"Nama '{name}' belum terdaftar."}), 404
+        return jsonify({"error": f"Nama '{user_obj.name}' belum terdaftar."}), 404
+        
     sess = find_session(doc, session_id)
     if not sess:
-        return jsonify({"error": f"session_id '{session_id}' tidak ditemukan untuk nama '{name}'."}), 404
+        return jsonify({"error": f"session_id '{session_id}' tidak ditemukan untuk nama '{user_obj.name}'."}), 404
+    
     msgs = sess.get("messages", []) or []
     return jsonify({
-        "name": doc.get("name", name),
+        "name": doc.get("name", user_obj.name),
         "session_id": session_id,
         "messages": msgs
     })
