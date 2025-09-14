@@ -22,3 +22,27 @@ class Chroma:
     
     def client(self):
         return self._client
+    
+    def clean(self):
+        """
+        Deletes all existing collections in the ChromaDB database.
+        """
+        print("Starting to delete all collections...")
+        try:
+            # Mengambil daftar semua koleksi
+            collections = self._client.list_collections()
+            
+            if not collections:
+                print("No collections found to delete.")
+                return True
+
+            for collection in collections:
+                collection_name = collection.name
+                print(f"Deleting collection: '{collection_name}'...")
+                self._client.delete_collection(collection_name)
+            
+            print("All collections have been successfully deleted.")
+            return True
+        except Exception as e:
+            print(f"An error occurred while deleting collections: {e}")
+            return False

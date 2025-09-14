@@ -1,10 +1,13 @@
 from vectordb import Chroma
 
 class Feeder():
+    def clean(self):
+        Chroma().clean()
+        return "clean"
+        
 
     def pushTalentInfo(self, data):
         def callback(item): 
-            print(item)
             return f"Nama Talent: {item['name']}\nPosition: {item['position']}\nDeskripsi: {item['summary']} \nSkills: {item['skills']} \nEducations: {item['educations']}"
         
         self.feed(data, collection_name="talent_pool", callback=callback)

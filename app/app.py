@@ -572,6 +572,15 @@ def feed_job_user():
         "status": "success"
     })
 
+@app.post("/api/feeder/clean")
+def clean_feeder():
+    Feeder().clean()
+
+    return jsonify({
+        "status": "success"
+    })
+
+
 
 # ======================================================================
 # MAIN
