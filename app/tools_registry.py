@@ -175,6 +175,7 @@ def initiate_contact(talent_id: int, talent_name: str, chat_user_id: int, job_op
     Membutuhkan chat_user_id milik talent dgn format "id@user_name"
     """
     try:
+        print(f"Attempt to initiate contact to {chat_user_id} [{talent_id}/{talent_name}] untuk {job_opening_id}")
         # Langkah 1: Daftarkan sebagai kandidat
         candidate_result = create_candidate(talent_id=talent_id, job_opening_id=job_opening_id, status=1) # Status 1 = Dihubungi
         if "error" in (candidate_result or {}):
@@ -216,7 +217,7 @@ tools = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "chat_user_id": {"type": "string", "description": "chat_user_id dari talent. formatnya id_user@nama_user"},
+                    "chat_user_id": {"type": "string", "description": "chat_user_id dari talent atau bisa ditemukan di user.chat_user_id"},
                     "talent_id": {"type": "integer", "description": "ID dari talent yang dihubungi."},
                     "talent_name": {"type": "string", "description": "Nama dari talent yang dihubungi."},
                     "job_opening_id": {"type": "integer", "description": "ID dari lowongan pekerjaan yang relevan."},

@@ -529,7 +529,12 @@ from feeder import Feeder
 @app.post("/api/feeder/talents")
 def feed_talent():
     payload = request.json
-    Feeder().pushTalentInfo(payload['data'])
+    try:
+        Feeder().pushTalentInfo(payload['data'])
+    except Exception as e:
+        print(payload['data'])
+        raise e
+
 
     return jsonify({
         "status": "success"
@@ -538,7 +543,11 @@ def feed_talent():
 @app.post("/api/feeder/companies")
 def feed_job_company():
     payload = request.json
-    Feeder().pushCompanyInfo(payload['data'])
+    try:
+        Feeder().pushCompanyInfo(payload['data'])
+    except Exception as e:
+        print(payload['data'])
+        raise e
 
     return jsonify({
         "status": "success"
@@ -556,8 +565,11 @@ def feed_job_candidate():
 @app.post("/api/feeder/job_openings")
 def feed_job_opening():
     payload = request.json
-    Feeder().pushJobOpening(payload['data'])
-
+    try:
+        Feeder().pushJobOpening(payload['data'])
+    except Exception as e:
+        print(payload['data'])
+        raise e
     return jsonify({
         "status": "success"
     })

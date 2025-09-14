@@ -424,14 +424,14 @@ def get_offer_details(candidate_id: int):
 
 
 # ===================== VECTOR RETRIEVAL ==================
-def retrieve_data(collection_name, search):
+def retrieve_data(collection_name, search: str = ""):
     from vectordb import Chroma
     print(f"Retrieve Data: search for \"{search}\" on \"{collection_name}\"")
     try:
         collection = Chroma().client().get_or_create_collection(name=collection_name)
         results = collection.query(
             query_texts=[search], # Chroma will embed this for you
-            n_results=2 # how many results to return
+            n_results=5 # how many results to return
         )
         return results
     except Exception as error:
