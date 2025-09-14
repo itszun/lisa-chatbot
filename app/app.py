@@ -228,57 +228,6 @@ def _extract_bearer_token(req) -> str:
     if auth.lower().startswith("bearer "):
         return auth.split(" ", 1)[1].strip()
     return ""
-#===============CHAT WITH TALENT TOOL==================================
-_helpers = {
-    "get_or_create_name_doc": None,
-    "append_session": None,
-    "DEFAULT_SYSTEM_PROMPT": "Anda adalah asisten AI."
-}
-
-def set_helpers(get_or_create_name_doc, append_session, default_system_prompt):
-    _helpers["get_or_create_name_doc"] = get_or_create_name_doc
-    _helpers["append_session"] = append_session
-    _helpers["DEFAULT_SYSTEM_PROMPT"] = default_system_prompt
-
-def start_chat_with_talent(talent_id: str, talent_name: str, initial_message: str):
-    """
-    Membuat sesi chat baru di MongoDB untuk seorang talent spesifik.
-    """
-    try:
-        # Pengecekan helper, pastikan sudah diinisialisasi
-        if not _helpers["get_or_create_name_doc"] or not _helpers["append_session"]:
-            return {"success": False, "error": "helpers belum diinisialisasi dari app.py"}
-
-        _helpers["get_or_create_name_doc"](
-            userid=str(talent_id), 
-            name=talent_name
-        )
-
-        new_session_id = str(uuid4())
-        created_at = datetime.now(timezone.utc)
-        messages = [
-            {"role": "system", "content": _helpers["DEFAULT_SYSTEM_PROMPT"]},
-            {"role": "assistant", "content": initial_message},
-        ]
-
-        # Panggil append_session dengan 'name' sesuai model data kita
-        _helpers["append_session"](
-            name=talent_name,
-            session_id=new_session_id,
-            created_at=created_at,
-            messages=messages,
-            title="Percakapan Awal"
-        )
-
-        return {
-            "success": True,
-            "message": f"Sesi chat baru dengan {talent_name} berhasil dibuat.",
-            "session_id": new_session_id
-        }
-    except Exception as e:
-        print(f"!!! ERROR di dalam TOOL start_chat_with_talent: {e}")
-        return {"success": False, "error": str(e)}
-#======================================================================  
 
 # ======================================================================
 # IMPORT TOOLS + INJEKSI HELPER
@@ -287,7 +236,7 @@ from tools_registry import tools as TOOLS_SPEC, available_functions as AVAILABLE
 set_helpers(get_or_create_chat_doc, append_session, DEFAULT_SYSTEM_PROMPT)
 
 # ======================================================================
-# ROUTES (VALIDASI DIHAPUS)
+# ROUTES 
 # ======================================================================
 @app.route("/")
 def index():
