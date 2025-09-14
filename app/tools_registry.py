@@ -6,6 +6,8 @@ import requests
 from uuid import uuid4
 from datetime import datetime, timezone
 from typing import Optional
+from openai import OpenAI, RateLimitError
+import os
 
 
 # ===== Helper injection (tanpa import app.py untuk hindari circular) =====
@@ -34,141 +36,20 @@ def set_helpers(get_or_create_chat_doc, append_session, default_system_prompt):
 # Contoh fungsi: list_talent, get_talent_detail, create_talent, dll.
 from api_client import (
     # talent
-    list_talent, get_talent_detail, create_talent, update_talent, delete_talent,
+    create_talent, update_talent, delete_talent,
     # candidates
-    list_candidates, get_candidate_detail, create_candidate, update_candidate, delete_candidate,
+    create_candidate, update_candidate, delete_candidate,
     # companies
-    list_companies, get_company_detail, create_company, update_company, delete_company,
+    create_company, update_company, delete_company,
     # company-properties
-    list_company_properties, get_company_property_detail, create_company_property, update_company_property, delete_company_property,
+    create_company_property, update_company_property, delete_company_property,
     # job-openings
-    list_job_openings, get_job_opening_detail, create_job_opening, update_job_opening, delete_job_opening,
-    # PEMBARUAN: Impor fungsi baru
-    get_offer_details, retrieve_data
+    create_job_opening, update_job_opening, delete_job_opening,
+    retrieve_data
 )
 
-
-# URL API Laravel Anda (Ganti dengan URL yang sebenarnya)
-LARAVEL_API_BASE = "http://127.0.0.1:8000/api"
-
-# ========== FUNGSI-FUNGSI BARU UNTUK INTEGRASI LARAVEL ==========
-# Ambil semua talent
-def get_talents():
-    try:
-        response = requests.get(f"{LARAVEL_API_BASE}/talents", timeout=15)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        return {"error": f"Gagal menghubungi API Laravel: {str(e)}"}
-
-# Siapkan pesan draf untuk konfirmasi sebelum mengirim ke talent
-def prepare_talent_message(talent_id: int, talent_name: str, sender_name: str, proposed_message: str):
-    talent_details = get_talent_detail(talent_id=talent_id)
-    skills = talent_details.get("skills", [])
-    
-    return {
-        "status": "waiting_confirmation",
-        "talent_id": talent_id,
-        "talent_name": talent_name,
-        "sender_name": sender_name,
-        "message_draft": proposed_message,
-        "confirmation_question": (
-            f"Baik, saya akan mengirim pesan ke {talent_name} dari {sender_name}. "
-            f"Apakah pesan berikut sudah sesuai: '{proposed_message}'? (Ya/Tidak/Ubah)"
-        )
-    }
-
-# Mulai sesi chat baru dengan talent
-# Gunakan helper yang diinjeksikan untuk mengakses MongoDB
-# Gunakan nama talent sebagai 'name' di koleksi user_chat
-# Simpan sesi baru dengan pesan sistem dan salam personalisasi
-# Kembalikan metadata sesi baru (tanpa pesan lengkap)
-def start_chat_with_talent(chat_user_id: str, initial_message: str):
-    try:
-        # Pengecekan helper, pastikan sudah diinisialisasi
-        if not _helpers["get_or_create_chat_doc"] or not _helpers["append_session"]:
-            return {"success": False, "error": "helpers belum diinisialisasi dari app.py"}
-
-        _helpers["get_or_create_chat_doc"](
-            userid=chat_user_id, 
-            name=chat_user_id
-        )
-
-        new_session_id = str(uuid4())
-        created_at = datetime.now(timezone.utc)
-        messages = [
-            {"role": "system", "content": _helpers["DEFAULT_SYSTEM_PROMPT"]},
-            {"role": "assistant", "content": initial_message},
-        ]
-
-        _helpers["append_session"](
-            name=chat_user_id,
-            session_id=new_session_id,
-            created_at=created_at,
-            messages=messages,
-            title="Percakapan Awal"
-        )
-
-        return {
-            "success": True,
-            "message": f"Sesi chat baru dengan {chat_user_id} berhasil dibuat.",
-            "session_id": new_session_id
-        }
-    except Exception as e:
-        import traceback
-        traceback.print_exc() 
-        return {"success": False, "error": str(e)}
-
-# Ambil daftar lowongan dan lengkapi dengan nama perusahaan
-# Berdasarkan company_id di setiap lowongan
-def list_job_openings_enriched(page: int = 1, per_page: int = 10, search: Optional[str] = None):
-    """
-    Ambil daftar lowongan lalu lengkapi dengan company_name berdasarkan company_id.
-    Selalu mengembalikan struktur { "data": [ ... ], "pagination": ...? } agar konsisten.
-    """
-    try:
-        raw_openings = list_job_openings(page=page, per_page=per_page, search=search)
-    except Exception as e:
-        return {"error": f"Gagal memuat lowongan: {str(e)}"}
-
-    items = []
-    # Cek jika outputnya dictionary dengan pagination
-    if isinstance(raw_openings, dict) and 'data' in raw_openings:
-        items = raw_openings.get("data", [])
-    # Cek jika outputnya hanya list
-    elif isinstance(raw_openings, list):
-        items = raw_openings
-    else:
-        return {"error": "Format data lowongan tidak dikenali."}
-
-    company_cache = {}
-    enriched_data = []
-    for job in items:
-        company_id = job.get('company_id')
-        company_name = "Perusahaan tidak diketahui"
-        if company_id:
-            if company_id in company_cache:
-                company_name = company_cache[company_id]
-            else:
-                try:
-                    company_details = get_company_detail(company_id=company_id)
-                    if company_details and 'name' in company_details:
-                        company_name = company_details['name']
-                        company_cache[company_id] = company_name
-                except Exception:
-                    pass # Biarkan nama default jika gagal fetch
-        
-        job['company_name'] = company_name
-        enriched_data.append(job)
-
-    # Menyesuaikan kembali format output jika ada pagination
-    if isinstance(raw_openings, dict):
-        raw_openings['data'] = enriched_data
-        return raw_openings
-    else:
-        return enriched_data
-    
 def initiate_contact(talent_id: int, talent_name: str, chat_user_id: int, job_opening_id: int, initial_message: str):
+    from prompt import TemplatePrompt
     """
     Mendaftarkan talent sebagai kandidat untuk sebuah lowongan DAN memulai sesi chat baru.
     Ini adalah tool utama untuk kontak awal.
@@ -182,7 +63,10 @@ def initiate_contact(talent_id: int, talent_name: str, chat_user_id: int, job_op
              return {"success": False, "error": f"Gagal membuat kandidat: {candidate_result['error']}"}
 
         # Langkah 2: Jika berhasil, mulai sesi chat
-        chat_result = start_chat_with_talent(chat_user_id=chat_user_id, initial_message=initial_message)
+        chat_result = start_new_chat(
+            chat_user_id=chat_user_id, 
+            system_prompt=TemplatePrompt.TALENT_SCOUTING_SCREENING,
+            initial_message=initial_message)
         if not chat_result.get("success"):
             return {"success": False, "error": f"Kandidat dibuat, tapi gagal memulai chat: {chat_result['error']}"}
 
@@ -191,6 +75,51 @@ def initiate_contact(talent_id: int, talent_name: str, chat_user_id: int, job_op
     except Exception as e:
         return {"success": False, "error": f"Terjadi kesalahan tak terduga: {str(e)}"}
 
+def start_new_chat(chat_user_id: str, system_prompt: str, initial_message: str):
+  try:
+    _helpers["get_or_create_chat_doc"](
+        userid=chat_user_id, 
+        name=chat_user_id
+    )
+
+    new_session_id = str(uuid4())
+    created_at = datetime.now(timezone.utc)
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "assistant", "content": initial_message},
+    ]
+    
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY belum diisi.")
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
+    title = (client.chat.completions.create(
+            model="gpt-4o", messages=[
+                  *messages,
+                  {"role": "user", "content": f"Buat judul singkat (maksimal 5 kata) untuk percakapan ini"}
+                ],
+            temperature=0.2, max_tokens=20
+        ).choices[0].message.content or "Percakapan Baru").strip().replace('"', '')
+    
+    _helpers["append_session"](
+        name=chat_user_id,
+        session_id=new_session_id,
+        created_at=created_at,
+        messages=messages,
+        title=title
+    )
+  
+    return {
+        "success": True,
+        "message": f"Sesi chat baru dengan {chat_user_id} berhasil dibuat.",
+        "session_id": new_session_id
+    }
+  
+  except Exception as e:
+      import traceback
+      traceback.print_exc() 
+      return {"success": False, "error": str(e)}
 
 # ========== DEFINISI SEMUA TOOLS (LAMA + BARU) ==========
 tools = [
@@ -227,63 +156,6 @@ tools = [
             }
         }
     },
-    # {
-    #     "type": "function",
-    #     "function": {
-    #         "name": "list_job_openings_enriched",
-    #         "description": "Mencari dan menampilkan daftar lowongan pekerjaan, lengkap dengan nama perusahaan.",
-    #         "parameters": {
-    #             "type": "object",
-    #             "properties": {
-    #                 "page": {"type": "integer", "default": 1, "description": "Nomor halaman."},
-    #                 "per_page": {"type": "integer", "default": 10, "description": "Jumlah item per halaman."},
-    #                 "search": {"type": "string", "description": "Kata kunci pencarian untuk judul lowongan."}
-    #             }
-    #         }
-    #     }
-    # },
-    # {
-    #     "type": "function",
-    #     "function": {
-    #         "name": "get_offer_details",
-    #         "description": "Mengambil detail penawaran kerja (gaji, tunjangan, dll) untuk seorang kandidat berdasarkan ID kandidat.",
-    #         "parameters": {
-    #             "type": "object",
-    #             "properties": {
-    #                 "candidate_id": {"type": "integer", "description": "ID dari kandidat yang akan diperiksa penawarannya."}
-    #             },
-    #             "required": ["candidate_id"]
-    #         }
-    #     }
-    # },
-    # ===== TALENT =====
-    # {
-    #   "type": "function",
-    #   "function": {
-    #     "name": "list_talent",
-    #     "description": "List talents with optional search & pagination.",
-    #     "parameters": {
-    #       "type": "object",
-    #       "properties": {
-    #         "page": {"type": "integer", "default": 1},
-    #         "per_page": {"type": "integer", "default": 10},
-    #         "search": {"type": "string"}
-    #       }
-    #     }
-    #   }
-    # },
-    # {
-    #   "type": "function",
-    #   "function": {
-    #     "name": "get_talent_detail",
-    #     "description": "Get a talent by ID.",
-    #     "parameters": {
-    #       "type": "object",
-    #       "properties": {"talent_id": {"type": "integer"}},
-    #       "required": ["talent_id"]
-    #     }
-    #   }
-    # },
     {
       "type": "function",
       "function": {
@@ -356,34 +228,6 @@ tools = [
       }
     },
 
-    # ===== CANDIDATES =====
-    # {
-    #   "type": "function",
-    #   "function": {
-    #     "name": "list_candidates",
-    #     "description": "List candidates.",
-    #     "parameters": {
-    #       "type": "object",
-    #       "properties": {
-    #         "page": {"type": "integer", "default": 1},
-    #         "per_page": {"type": "integer", "default": 10},
-    #         "search": {"type": "string"}
-    #       }
-    #     }
-    #   }
-    # },
-    # {
-    #   "type": "function",
-    #   "function": {
-    #     "name": "get_candidate_detail",
-    #     "description": "Get candidate by ID.",
-    #     "parameters": {
-    #       "type": "object",
-    #       "properties": {"candidate_id": {"type": "integer"}},
-    #       "required": ["candidate_id"]
-    #     }
-    #   }
-    # },
     {
       "type": "function",
       "function": {
@@ -436,34 +280,6 @@ tools = [
       }
     },
 
-    # ===== COMPANIES =====
-    # {
-    #   "type": "function",
-    #   "function": {
-    #     "name": "list_companies",
-    #     "description": "List companies.",
-    #     "parameters": {
-    #       "type": "object",
-    #       "properties": {
-    #         "page": {"type": "integer", "default": 1},
-    #         "per_page": {"type": "integer", "default": 10},
-    #         "search": {"type": "string"}
-    #       }
-    #     }
-    #   }
-    # },
-    # {
-    #   "type": "function",
-    #   "function": {
-    #     "name": "get_company_detail",
-    #     "description": "Get company by ID.",
-    #     "parameters": {
-    #       "type": "object",
-    #       "properties": {"company_id": {"type": "integer"}},
-    #       "required": ["company_id"]
-    #     }
-    #   }
-    # },
     {
       "type": "function",
       "function": {
@@ -509,35 +325,6 @@ tools = [
         }
       }
     },
-
-    # ===== COMPANY PROPERTIES =====
-    # {
-    #   "type": "function",
-    #   "function": {
-    #     "name": "list_company_properties",
-    #     "description": "List company properties.",
-    #     "parameters": {
-    #       "type": "object",
-    #       "properties": {
-    #         "page": {"type": "integer", "default": 1},
-    #         "per_page": {"type": "integer", "default": 10},
-    #         "search": {"type": "string"}
-    #       }
-    #     }
-    #   }
-    # },
-    # {
-    #   "type": "function",
-    #   "function": {
-    #     "name": "get_company_property_detail",
-    #     "description": "Get company property by ID.",
-    #     "parameters": {
-    #       "type": "object",
-    #       "properties": {"prop_id": {"type": "integer"}},
-    #       "required": ["prop_id"]
-    #     }
-    #   }
-    # },
     {
       "type": "function",
       "function": {
@@ -580,33 +367,6 @@ tools = [
           "type": "object",
           "properties": {"prop_id": {"type": "integer"}},
           "required": ["prop_id"]
-        }
-      }
-    },
-
-    # ===== JOB OPENINGS =====
-    # {
-    #   "type": "function",
-    #   "function": {
-    #     "name": "list_job_openings",
-    #     "description": "List job openings.",
-    #     "parameters": {
-    #       "type": "object",
-    #       "properties": {
-    #         "search": {"type": "string"}
-    #       }
-    #     }
-    #   }
-    # },
-    {
-      "type": "function",
-      "function": {
-        "name": "get_job_opening_detail",
-        "description": "Get job opening by ID.",
-        "parameters": {
-          "type": "object",
-          "properties": {"opening_id": {"type": "integer"}},
-          "required": ["opening_id"]
         }
       }
     },
@@ -664,30 +424,18 @@ tools = [
 # ========== MAPPING FUNGSI ==========
 available_functions = {
     "initiate_contact": initiate_contact,
-    # "get_offer_details": get_offer_details,
-    # "list_job_openings_enriched": list_job_openings_enriched, 
-    # "list_talent": list_talent,
-    # "get_talent_detail": get_talent_detail,
     "create_talent": create_talent,
     "update_talent": update_talent,
     "delete_talent": delete_talent,
-    # "list_candidates": list_candidates,
-    # "get_candidate_detail": get_candidate_detail,
     "create_candidate": create_candidate,
     "update_candidate": update_candidate,
     "delete_candidate": delete_candidate,
-    # "list_companies": list_companies,
-    # "get_company_detail": get_company_detail,
     "create_company": create_company,
     "update_company": update_company,
     "delete_company": delete_company,
-    # "list_company_properties": list_company_properties,
-    # "get_company_property_detail": get_company_property_detail,
     "create_company_property": create_company_property,
     "update_company_property": update_company_property,
     "delete_company_property": delete_company_property,
-    # "list_job_openings": list_job_openings,
-    # "get_job_opening_detail": get_job_opening_detail,
     "create_job_opening": create_job_opening,
     "update_job_opening": update_job_opening,
     "delete_job_opening": delete_job_opening,

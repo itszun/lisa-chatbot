@@ -1,6 +1,8 @@
 import chromadb
 from chromadb.types import Database, Tenant, Collection as CollectionModel
 import os
+from pymongo import MongoClient
+from pymongo.server_api import ServerApi
 
 def singleton(cls):
     instances = {}
@@ -46,3 +48,27 @@ class Chroma:
         except Exception as e:
             print(f"An error occurred while deleting collections: {e}")
             return False
+            
+
+@singleton
+class MongoProvider:
+    _client = {}
+    db_name = "chatbot_db"
+    def __init__(self):        
+        MONGO_URI = os.getenv("MONGO_URI")
+        if not MONGO_URI:
+            raise RuntimeError("MONGO_URI belum diisi.")
+        self._client = MongoClient(MONGO_URI, server_api=ServerApi('1'))
+
+    def client(self):
+        return self._client
+    
+    
+    def get_collection(self, collection_name):
+        # Ambil database, kalau belum ada otomatis dibuat
+        db = self.client()[self.db_name]
+        # Ambil collection, kalau belum ada otomatis dibuat
+        return db[collection_name]
+    
+
+    
