@@ -1,8 +1,3 @@
-#tools_registry.py
-# Berisi definisi alat (tools) yang dapat digunakan oleh AI,
-# serta fungsi-fungsi pembantu untuk mengakses API Laravel.
-import json
-import requests
 from uuid import uuid4
 from datetime import datetime, timezone
 from typing import Optional
