@@ -19,7 +19,7 @@ from api_client import ensure_token, get_talent_detail, get_company_detail
 # ======================================================================
 # KONFIGURASI UMUM
 # ======================================================================
-MAX_HISTORY_MESSAGES = 50
+MAX_HISTORY_MESSAGES = 100
 
 load_dotenv()
 
@@ -156,12 +156,15 @@ DEFAULT_SYSTEM_PROMPT = (
 # ======================================================================
 # UTILITAS
 # ======================================================================
+
+# Struktur data untuk menyimpan info user
 from dataclasses import dataclass
 @dataclass
 class User:
     userid: str
     name: str
 
+# Fungsi untuk mengurai field user
 def parse_user(user_field: str) -> User:
     """Mengurai 'userid@name' dan mengembalikan objek User yang rapi."""
     if not user_field or "@" not in user_field:
@@ -173,13 +176,29 @@ def parse_user(user_field: str) -> User:
         raise ValueError("userid atau nama tidak boleh kosong.")
     return User(userid=userid, name=name)
 
+# Mendapatkan atau membuat dokumen chat berdasarkan name
+# Kenapa name? Karena name adalah identitas unik pengguna dalam konteks ini.
+#struktur dokumen:
+# {
+#   "name": "nama_pengguna",
+#   "users": [{"userid": "id1"}, {"userid": "id2"}],
+#   "sessions": [
+#       {
+#           "session_id": "uuid",
+#           "created_at": datetime,
+#           "title": "judul percakapan",
+#           "messages": [{"role": "user/assistant/system/tool", "content": "pesan"}]
+#       }
+#   ]
+# Jika dokumen sudah ada, periksa apakah userid sudah terdaftar di array 'users'.
+# Jika belum, tambahkan userid tersebut.
+# Jika dokumen tidak ada, buat yang baru dengan userid sebagai entri pertama di array 'users'.
+# Gunakan 'name' sebagai kunci utama.
+# Kembalikan dokumen yang ditemukan atau dibuat.
 def get_or_create_chat_doc(userid: str, name: str) -> dict:
-    # Mencari dokumen hanya berdasarkan nama
     doc = users_chats.find_one({"name": name})
-
     if doc:
-        user_exists = users_chats.find_one({"name": name, "users": {"$elemMatch": {"userid": userid}}})
-        
+        user_exists = users_chats.find_one({"name": name, "users": {"$elemMatch": {"userid": userid}}}) 
         if not user_exists:
             # Jika userid belum ada, tambahkan ke array 'users'
             users_chats.update_one(
@@ -198,6 +217,8 @@ def get_or_create_chat_doc(userid: str, name: str) -> dict:
         users_chats.insert_one(new_doc)
         return users_chats.find_one({"name": name})
 
+# Mencari sesi dalam dokumen berdasarkan session_id
+# Kembalikan sesi yang ditemukan atau None.
 def find_session(doc: dict, session_id: str) -> Optional[dict]:
     for s in (doc.get("sessions") or []):
         if s.get("session_id") == session_id:
@@ -205,6 +226,7 @@ def find_session(doc: dict, session_id: str) -> Optional[dict]:
     return None
 
 # Memperbarui pesan dalam sesi yang ada di mongo berdasarkan name dan session_id
+# Gunakan 'name' sebagai kunci utama.
 def upsert_session_messages(name: str, session_id: str, messages: List[dict]) -> None:
     users_chats.update_one(
         {"name": name, "sessions.session_id": session_id},
@@ -212,6 +234,7 @@ def upsert_session_messages(name: str, session_id: str, messages: List[dict]) ->
     )
 
 # Menambahkan sesi baru
+# Gunakan 'name' sebagai kunci utama.
 def append_session(name: str, session_id: str, created_at: datetime, messages: List[dict], title: str) -> None:
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
@@ -223,6 +246,7 @@ def append_session(name: str, session_id: str, created_at: datetime, messages: L
         }}}
     )
 
+# Ekstrak token Bearer dari header Authorization
 def _extract_bearer_token(req) -> str:
     auth = (req.headers.get("Authorization") or "").strip()
     if auth.lower().startswith("bearer "):
@@ -232,6 +256,10 @@ def _extract_bearer_token(req) -> str:
 # ======================================================================
 # IMPORT TOOLS + INJEKSI HELPER
 # ======================================================================
+# Injeksi helper dari app.py ke tools_registry.py
+# untuk mengakses fungsi get_or_create_chat_doc dan append_session
+# tanpa membuat dependensi melingkar.
+# kenapa? Karena tools_registry.py perlu mengakses MongoDB
 from tools_registry import tools as TOOLS_SPEC, available_functions as AVAILABLE_FUNCS, set_helpers
 set_helpers(get_or_create_chat_doc, append_session, DEFAULT_SYSTEM_PROMPT)
 
@@ -243,6 +271,12 @@ def index():
     return render_template("index.html")
 
 # ====================MENDAPATKAN DAFTAR SESI DARI CHAT==================================================
+# Gunakan 'name' sebagai kunci utama.
+# Jika dokumen tidak ditemukan, buat yang baru.
+# fungsi ini hanya mengembalikan metadata sesi, bukan pesan lengkap.
+# Metadata sesi meliputi: session_id, title, created_at, messages_count
+# Urutkan sesi berdasarkan created_at terbaru.
+# Gunakan parse_user untuk mengurai field user.
 @app.route("/api/sessions", methods=["GET"])
 def list_sessions():
     try:
@@ -278,6 +312,14 @@ def list_sessions():
 #GUNAKANN USER_CHAT.NAME UNTUK MENDAPATKAN RESPONSE
     return jsonify({"name": user_chat.name, "sessions": sessions})
 
+# ====================MEMBUAT SESI CHAT BARU==================================================
+# Gunakan 'name' sebagai kunci utama.
+# Jika dokumen tidak ditemukan, buat yang baru.
+# Gunakan parse_user untuk mengurai field user.
+# Buat sesi baru dengan pesan sistem dan salam personalisasi.
+# Simpan sesi di MongoDB.
+# Kembalikan metadata sesi baru (tanpa pesan lengkap).
+# Gunakan name dari user_chat untuk menyimpan sesi.
 @app.route("/api/sessions", methods=["POST"])
 def create_session():
     data = request.get_json(force=True)
@@ -326,6 +368,19 @@ def create_session():
         "created_at": created_at.isoformat()
     })
 
+# ====================MENGIRIM PESAN CHAT==================================================
+# Gunakan 'name' sebagai kunci utama.
+# Jika dokumen tidak ditemukan, buat yang baru.
+# Gunakan parse_user untuk mengurai field user.
+# Jika session_id tidak diberikan, buat sesi baru.
+# Jika session_id diberikan, cari sesi tersebut.
+# Jika tidak ditemukan, kembalikan error.
+# Gunakan _ctx_slice untuk membatasi konteks pesan.
+# Gunakan TOOLS_SPEC dan AVAILABLE_FUNCS untuk pemrosesan chat.
+# Simpan pesan dan hasil tool di MongoDB.
+# Kembalikan jawaban asisten, session_id, dan tool_runs.
+# bagian ini adalah inti dari alur kerja chatbot.
+# berfungsi sebagai penghubung antara input pengguna, pemrosesan AI, dan penyimpanan di MongoDB.
 @app.route("/api/chat", methods=["POST"])
 def chat():
     data = request.get_json(force=True)
@@ -428,6 +483,11 @@ def chat():
 
     return jsonify(response_data)
 
+# ====================MENDAPATKAN PESAN DARI SESI TERTENTU==================================================
+# fungsi ini untuk mendapatkan pesan lengkap dari sesi tertentu.
+# dana digunakan di UI untuk menampilkan riwayat pesan.
+# Gunakan 'name' sebagai kunci utama.
+# Jika dokumen tidak ditemukan, kembalikan error.
 @app.get("/api/session/messages")
 def get_session_messages():
     try:
