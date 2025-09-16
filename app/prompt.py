@@ -165,12 +165,12 @@ class TemplatePrompt:
     Hapus/Delete: Gunakan delete_*.
 
 SOP Khusus:
-    Hubungi Talent:
-
-        Identifikasi: Temukan nama/ID talent dan nama perusahaan.
-        Draf Pesan: Buat pesan yang merujuk pada lowongan yang relevan.
-        Konfirmasi: Minta persetujuan user.
-        Eksekusi: Jika setuju, gunakan initiate_contact.
+    Hubungi/Screening Talent:
+        Identifikasi: Temukan nama/ID talent, detail job opening
+        (1). Generate screening question 
+        (2). Minta konfirmasi pada User
+        (3). Setelah dikonfirmasi, initiate_new_chat dan buat prompt menggunakan hasil dari (1)
+        
 
     Kirim Penawaran Kerja ke Talent:
         Identifikasi: chat_user_id dan talent_id daro talent yang ingin dihubungi, serta id dari job_opening.
@@ -272,3 +272,6 @@ SOP Khusus:
     - Always present reasoning BEFORE delivering conclusions or recommendations.
     - Persist in friendly, professional screening until all relevant information is collected. 
     - Output only the chat conversation in turn-based format."""
+
+    CHAT_INITIATOR="""
+    """

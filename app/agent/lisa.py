@@ -2,7 +2,7 @@ import os
 import json
 from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage, message_to_dict
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
@@ -20,12 +20,37 @@ from datetime import datetime
 @dataclass
 class UserContext:
     chat_user_id: str
+    created_by: str
     # prompt_mode: str
 
+import uuid
 class Lisa:
     agent = {}
     def __init__(self):
         print("LISA INITIATE")
+
+    def initiate_chat(self, chat_user_id, prompt):
+        session_id = str(uuid.uuid4())
+        print("LISA INITIATE CHAT: ", session_id) 
+
+        chat_session = self.get_session(chat_user_id, session_id);
+        
+        system_message = self.context_definer([HumanMessage(content=prompt)])
+
+        ai_message = self.ai_starter_template(system_message)
+
+        messages = [
+            system_message,
+            ai_message
+        ]
+        chat_session.add_messages(messages)
+
+        print(messages)
+        return {
+            "session_id": session_id,
+        }
+
+    def chat(self, chat_user_id, user_message, session_id):
         self.agent = create_agent(
             self.select_model,
             tools=tools,
@@ -33,17 +58,17 @@ class Lisa:
             prompt=self.dynamic_prompt,
         )
 
-    def chat(self, chat_user_id, message, session_id):
         chat_session = self.get_session(chat_user_id, session_id)
         print(chat_session.messages)
 
         chat_session.add_user_message(HumanMessage(
-            content=message, timestamp=str(datetime.now())))
+            content=user_message, timestamp=str(datetime.now())))
         print("SESSION")
         print(chat_session.messages)
+
         response = self.agent.invoke({
             "messages": chat_session.messages
-        }, context=UserContext(chat_user_id))
+        }, context=UserContext(chat_user_id, "user"))
         ai_response = response['messages'][-1]
         chat_session.add_ai_message(ai_response)
         return ai_response
@@ -70,10 +95,34 @@ class Lisa:
                  f"""About User: {user_info}"""
                  )}
             ]
+
+        system_msg = self.context_definer(messages)
+        messages = [system_msg] + state["messages"]
+        return messages
+    
+    def ai_starter_template(self, system_message) -> AIMessage:
+        response = ChatOpenAI().invoke([
+            system_message,
+            HumanMessage(content="Mulai pembicaraan berdasarkan konteks diatas seolah kamu yang memulai percakapan ini")
+        ])
+        return response
+
+    def invoke(self, messages):
+        response = ChatOpenAI().invoke(messages)
+        print(messages)
+
+        sess = self.get_session("automated", str(uuid.uuid4()))
+        sess.aadd_messages(messages)
+        sess.add_ai_message(response)
+
+        return response
+
+    
+    def context_definer(self, messages) -> SystemMessage:
         response = ChatOpenAI().bind_tools([retrieve_prompt]).invoke(messages)
 
         for tc in response.tool_calls:
-            print("TOol Calls:", tc)
+            print("Tool Calls:", tc)
             fname = tc['name']
             fargs = tc['args'];
             tool_result = globals()[fname].invoke(fargs)
@@ -86,13 +135,9 @@ class Lisa:
             tool_message.text()
 
 
-        system_msg = SystemMessage(
+        return SystemMessage(
             content=tool_message.text()
         )
-
-        
-        messages = [system_msg] + state["messages"]
-        return messages
         
     def select_model(self, state: AgentState, runtime: Runtime) -> ChatOpenAI:
         """Choose model based on conversation complexity."""
