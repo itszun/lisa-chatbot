@@ -249,13 +249,13 @@ import json
 def chat2():
     data = request.get_json(force=True)
     
-    user_field = (data.get("user") or "").strip()
+    chat_user_id = (data.get("user") or "").strip()
     user_msg = (data.get("message") or "").strip()
     session_id = data.get("session_id").strip()
     if session_id == "":
         session_id = str(uuid4()) 
 
-    response = Lisa().chat(user_msg, session_id)
+    response = Lisa().chat(chat_user_id, user_msg, session_id)
     print("RESPONSE ======")
     return jsonify({
             "session_id": session_id,

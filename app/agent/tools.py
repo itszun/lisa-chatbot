@@ -20,12 +20,8 @@ def set_helpers(get_or_create_chat_doc, append_session, default_system_prompt):
 
 # Import API client functions
 from api_client import (
-    create_talent, update_talent, delete_talent,
-    create_candidate, update_candidate, delete_candidate,
-    create_company, update_company, delete_company,
-    create_company_property, update_company_property, delete_company_property,
-    create_job_opening, update_job_opening, delete_job_opening,
-    retrieve_data, relogin_once_on_401
+    retrieve_data, relogin_once_on_401,
+    _update_resource, _delete_resource, _create_resource
 )
 
 # Start new chat is an internal function, not a tool
@@ -133,8 +129,6 @@ def retrieve_data(collection_name: str, search: str) -> dict:
     except Exception as error:
         print("Error Tools")
         print(error)
-    else:
-        return "None"
 
 @tool
 def create_talent(name: str, position: str, birthdate: str, summary: str, skills: Optional[List[str]] = None, educations: Optional[List[Dict[str, Any]]] = None) -> dict:
@@ -176,7 +170,12 @@ def update_talent(talent_id: int, name: Optional[str] = None, position: Optional
         skills (List[str], optional): Daftar keahlian atau skill yang dimiliki.
         educations (List[Dict[str, Any]], optional): Daftar riwayat pendidikan talent.
     """
-    return update_talent(talent_id, name, position, birthdate, summary, skills, educations)
+    payload: Dict[str, Any] = {}
+    if name is not None: payload["name"] = name
+    if position is not None: payload["position"] = position
+    if birthdate is not None: payload["birthdate"] = birthdate
+    if summary is not None: payload["summary"] = summary
+    return relogin_once_on_401(_update_resource, "talent", talent_id, payload)
 
 @tool
 def delete_talent(talent_id: int) -> dict:
@@ -186,12 +185,12 @@ def delete_talent(talent_id: int) -> dict:
     Args:
         talent_id (int): ID unik dari talent yang akan dihapus.
     """
-    return delete_talent(talent_id)
+    return relogin_once_on_401(_delete_resource, "talent", talent_id)
 
 # ========== CANDIDATE MANAGEMENT ==========
 
 @tool
-def create_candidate(talent_id: int, job_opening_id: int, status: Optional[int] = None, regist_at: Optional[str] = None, interview_schedule: Optional[str] = None, notified_at: Optional[str] = None) -> dict:
+def create_candidate(talent_id: int, job_opening_id: int, status: Optional[int] = None, **kwargs) -> dict:
     """
     Create a new candidate record, linking a talent to a job opening.
 
@@ -203,10 +202,11 @@ def create_candidate(talent_id: int, job_opening_id: int, status: Optional[int] 
         interview_schedule (str, optional): Jadwal wawancara dalam format YYYY-MM-DD HH:MM:SS.
         notified_at (str, optional): Waktu pemberitahuan dalam format YYYY-MM-DD HH:MM:SS.
     """
-    return create_candidate(talent_id, job_opening_id, status, regist_at, interview_schedule, notified_at)
+    payload = {"talent_id": talent_id, "job_opening_id": job_opening_id, "status": status ,**kwargs}
+    return relogin_once_on_401(_create_resource, "candidates", payload)
 
 @tool
-def update_candidate(candidate_id: int, talent_id: Optional[int] = None, job_opening_id: Optional[int] = None, status: Optional[int] = None, regist_at: Optional[str] = None, interview_schedule: Optional[str] = None, notified_at: Optional[str] = None) -> dict:
+def update_candidate(candidate_id: int, talent_id: Optional[int] = None, job_opening_id: Optional[int] = None, **kwargs) -> dict:
     """
     Update an existing candidate record.
 
@@ -219,7 +219,10 @@ def update_candidate(candidate_id: int, talent_id: Optional[int] = None, job_ope
         interview_schedule (str, optional): Jadwal wawancara dalam format YYYY-MM-DD HH:MM:SS.
         notified_at (str, optional): Waktu pemberitahuan dalam format YYYY-MM-DD HH:MM:SS.
     """
-    return update_candidate(candidate_id, talent_id, job_opening_id, status, regist_at, interview_schedule, notified_at)
+    payload = {k: v for k, v in kwargs.items() if v is not None}
+    if not payload:
+        return {"message": "Tidak ada data untuk diupdate."}
+    return relogin_once_on_401(_update_resource, "candidates", candidate_id, payload)
 
 @tool
 def delete_candidate(candidate_id: int) -> dict:
@@ -229,12 +232,12 @@ def delete_candidate(candidate_id: int) -> dict:
     Args:
         candidate_id (int): ID unik dari kandidat yang akan dihapus.
     """
-    return delete_candidate(candidate_id)
+    return relogin_once_on_401(_delete_resource, "candidates", candidate_id)
 
 # ========== COMPANY MANAGEMENT ==========
 
 @tool
-def create_company(name: str, description: Optional[str] = None, status: Optional[int] = None) -> dict:
+def create_company(name: str, description: Optional[str] = None, **kwargs) -> dict:
     """
     Create a new company record.
 
@@ -243,7 +246,9 @@ def create_company(name: str, description: Optional[str] = None, status: Optiona
         description (str, optional): Deskripsi singkat tentang perusahaan.
         status (int, optional): Status perusahaan.
     """
-    return create_company(name, description, status)
+    payload = {"name": name, **kwargs}
+    return relogin_once_on_401(_create_resource, "companies", payload)
+
 
 @tool
 def update_company(company_id: int, name: Optional[str] = None, description: Optional[str] = None, status: Optional[int] = None) -> dict:
@@ -256,7 +261,13 @@ def update_company(company_id: int, name: Optional[str] = None, description: Opt
         description (str, optional): Deskripsi singkat tentang perusahaan.
         status (int, optional): Status perusahaan.
     """
-    return update_company(company_id, name, description, status)
+    payload = {
+        "company_id": company_id, 
+        "name": name, 
+        "description": description,
+        "status": status
+    }
+    return relogin_once_on_401(_update_resource, "companies", company_id, payload)
 
 @tool
 def delete_company(company_id: int) -> dict:
@@ -266,7 +277,7 @@ def delete_company(company_id: int) -> dict:
     Args:
         company_id (int): ID unik dari perusahaan yang akan dihapus.
     """
-    return delete_company(company_id)
+    return relogin_once_on_401(_delete_resource, "companies", company_id)
 
 # ========== COMPANY PROPERTY MANAGEMENT ==========
 
@@ -280,35 +291,14 @@ def create_company_property(company_id: int, key: str, value: str) -> dict:
         key (str): Kunci properti (misalnya 'lokasi', 'industri').
         value (str): Nilai dari properti tersebut.
     """
-    return create_company_property(company_id, key, value)
+    payload = {"company_id": company_id, "key": key, "value": value}
+    return relogin_once_on_401(_create_resource, "company-properties", payload)
 
-@tool
-def update_company_property(prop_id: int, company_id: Optional[int] = None, key: Optional[str] = None, value: Optional[str] = None) -> dict:
-    """
-    Update an existing company property.
-
-    Args:
-        prop_id (int): ID unik dari properti yang akan diperbarui.
-        company_id (int, optional): ID unik dari perusahaan.
-        key (str, optional): Kunci properti.
-        value (str, optional): Nilai dari properti tersebut.
-    """
-    return update_company_property(prop_id, company_id, key, value)
-
-@tool
-def delete_company_property(prop_id: int) -> dict:
-    """
-    Delete a company property by its ID.
-
-    Args:
-        prop_id (int): ID unik dari properti yang akan dihapus.
-    """
-    return delete_company_property(prop_id)
 
 # ========== JOB OPENING MANAGEMENT ==========
 
 @tool
-def create_job_opening(company_id: int, title: str, body: Optional[str] = None, due_date: Optional[str] = None, status: Optional[int] = None) -> dict:
+def create_job_opening(company_id: int, title: str, body: Optional[str] = None, due_date: Optional[str] = None, status: Optional[int] = None, **kwargs) -> dict:
     """
     Create a new job opening.
 
@@ -319,10 +309,15 @@ def create_job_opening(company_id: int, title: str, body: Optional[str] = None, 
         due_date (str, optional): Tanggal tenggat lamaran dalam format YYYY-MM-DD.
         status (int, optional): Status lowongan (misalnya 1=Aktif, 0=Nonaktif).
     """
-    return create_job_opening(company_id, title, body, due_date, status)
+    
+    payload = {"company_id": company_id, "title": title}
+    payload["body"] = body if body is not None else ""
+    payload["status"] = status # <-- Menambahkan status default (1 = aktif)
+    payload.update(kwargs)
+    return relogin_once_on_401(_create_resource, "job-openings", payload)
 
 @tool
-def update_job_opening(opening_id: int, company_id: Optional[int] = None, title: Optional[str] = None, body: Optional[str] = None, due_date: Optional[str] = None, status: Optional[int] = None) -> dict:
+def update_job_opening(opening_id: int, company_id: Optional[int] = None, title: Optional[str] = None, body: Optional[str] = None, due_date: Optional[str] = None, status: Optional[int] = None, **kwargs) -> dict:
     """
     Update an existing job opening record.
 
@@ -334,7 +329,10 @@ def update_job_opening(opening_id: int, company_id: Optional[int] = None, title:
         due_date (str, optional): Tanggal tenggat lamaran dalam format YYYY-MM-DD.
         status (int, optional): Status lowongan (misalnya 1=Aktif, 0=Nonaktif).
     """
-    return update_job_opening(opening_id, company_id, title, body, due_date, status)
+    payload = {k: v for k, v in kwargs.items() if v is not None}
+    if not payload:
+        return {"message": "Tidak ada data untuk diupdate."}
+    return relogin_once_on_401(_update_resource, "job-openings", opening_id, payload)
 
 @tool
 def delete_job_opening(opening_id: int) -> dict:
@@ -344,9 +342,98 @@ def delete_job_opening(opening_id: int) -> dict:
     Args:
         opening_id (int): ID unik dari lowongan pekerjaan yang akan dihapus.
     """
-    return delete_job_opening(opening_id)
+    return relogin_once_on_401(_delete_resource, "job-openings", opening_id)
+
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableConfig
+from langchain_core.vectorstores import InMemoryVectorStore
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+recall_vector_store = InMemoryVectorStore(OpenAIEmbeddings())
+
+def get_user_id(config: RunnableConfig) -> str:
+    user_id = config["configurable"].get("user_id")
+    if user_id is None:
+        raise ValueError("User ID needs to be provided to save a memory.")
+
+    return user_id
+
+import tiktoken
+from langchain_core.documents import Document
+@tool
+def save_recall_memory(memory: str, config: RunnableConfig) -> str:
+    """Save memory to vectorstore for later semantic retrieval."""
+    user_id = get_user_id(config)
+    document = Document(
+        page_content=memory, id=str(uuid.uuid4()), metadata={"user_id": user_id}
+    )
+    recall_vector_store.add_documents([document])
+    return memory
+
+
+@tool
+def search_recall_memories(query: str, config: RunnableConfig) -> List[str]:
+    """Search for relevant memories."""
+    user_id = get_user_id(config)
+
+    def _filter_function(doc: Document) -> bool:
+        return doc.metadata.get("user_id") == user_id
+
+    documents = recall_vector_store.similarity_search(
+        query, k=3, filter=_filter_function
+    )
+    return [document.page_content for document in documents]
+
+@tool
+def fetch_user_data(chat_user_id: str) -> str:
+    """Get User Information by chat_user_id. 
+    
+    Untuk pertanyaan "Siapa nama ku"
+    """
+    from vectordb import Chroma
+    import json
+
+    print(f":: Fetch User Data\n {chat_user_id}")
+
+    collection = Chroma().client().get_or_create_collection('users',)
+    
+    user = collection.query(
+        query_texts=chat_user_id,
+        where={
+            "chat_user_id": chat_user_id
+        },
+        n_results=1 # how many results to return
+    )
+    print(f":: Get User Info\n")
+    print(user)
+    if len(user['metadatas'][0]) < 1:
+        return None
+    user_info = json.dumps({
+        'metadatas': user['metadatas'][0][0],
+        'description': user['documents'][0][0]
+    })
+
+    print(f":: Get User Info\n {chat_user_id}")
+
+
+    return user_info
+
+@tool
+def retrieve_prompt(context):
+    """
+    Mendapatkan context_prompt berdasarkan informasi user dan message nya
+
+    context: 
+        HR_ASSISTANT for user is a company and asking about management of talent/candidate/job opening 
+        TALENT_COMPANION for user is a talent and asking anything
+    """
+    from prompt import TemplatePrompt
+    print(context)
+    return getattr(TemplatePrompt, context) 
+
 
 tools = [
+    save_recall_memory, 
+    search_recall_memories,
     initiate_contact,
     retrieve_data,
     create_talent,
@@ -359,9 +446,8 @@ tools = [
     update_company,
     delete_company,
     create_company_property,
-    update_company_property,
-    delete_company_property,
     create_job_opening,
     update_job_opening,
     delete_job_opening,
+    fetch_user_data
 ]

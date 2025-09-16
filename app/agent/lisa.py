@@ -1,48 +1,98 @@
 import os
+import json
 from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain.agents import create_agent, AgentState
 from langgraph.runtime import Runtime
-from agent.tools import tools
+from agent.tools import tools, retrieve_prompt, fetch_user_data
+from vectordb import Chroma, MongoProvider
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.vectorstores import InMemoryVectorStore
+from langgraph.runtime import get_runtime
+from prompt import ContextDefiner
+from dataclasses import dataclass
+from datetime import datetime
+
+@dataclass
+class UserContext:
+    chat_user_id: str
+    # prompt_mode: str
 
 class Lisa:
     agent = {}
     def __init__(self):
+        print("LISA INITIATE")
         self.agent = create_agent(
             self.select_model,
             tools=tools,
+            context_schema=UserContext,
             prompt=self.dynamic_prompt,
         )
 
-    def chat(self, message, session_id):
-        chat_session = self.get_session(session_id)
+    def chat(self, chat_user_id, message, session_id):
+        chat_session = self.get_session(chat_user_id, session_id)
         print(chat_session.messages)
 
-        chat_session.add_user_message(HumanMessage(content=message))
+        chat_session.add_user_message(HumanMessage(
+            content=message, timestamp=str(datetime.now())))
         print("SESSION")
         print(chat_session.messages)
         response = self.agent.invoke({
-            "messages": 
-                chat_session.messages,
-                
-        })
+            "messages": chat_session.messages
+        }, context=UserContext(chat_user_id))
         ai_response = response['messages'][-1]
         chat_session.add_ai_message(ai_response)
         return ai_response
     
     
-    def dynamic_prompt(self, state):
-        user_type = state.get("user_type", "standard")
+    def dynamic_prompt(self, state: AgentState, **kwargs):
+        isNew = False
+        messages = state['messages']
+        try:
+            messages[1]
+            return messages
+        except Exception as e:
+            isNew = True
+            
+        runtime = get_runtime(UserContext)
+        # Summarize Conversation
+
+        user_info = fetch_user_data.invoke({'chat_user_id':runtime.context.chat_user_id})
+
+        messages = [
+                *messages,
+                {"role": "user", "content": (
+                 """Berdasarkan Informasi User dan Pesan diatas, tentukan context prompt yang sesuai. Lalu gunakan tools retrieve_prompt """
+                 f"""About User: {user_info}"""
+                 )}
+            ]
+        response = ChatOpenAI().bind_tools([retrieve_prompt]).invoke(messages)
+
+        for tc in response.tool_calls:
+            print("TOol Calls:", tc)
+            fname = tc['name']
+            fargs = tc['args'];
+            tool_result = globals()[fname].invoke(fargs)
+            tool_message = ToolMessage(
+                content=tool_result,
+                tool_call_id=tc['id']
+            )
+            print("tool_message")
+            print(tool_message)
+            tool_message.text()
+
+
         system_msg = SystemMessage(
-            content="Provide detailed technical responses."
-            if user_type == "expert"
-            else "Provide simple, clear explanations."
+            content=tool_message.text()
         )
-        return [system_msg] + state["messages"]
+
+        
+        messages = [system_msg] + state["messages"]
+        return messages
         
     def select_model(self, state: AgentState, runtime: Runtime) -> ChatOpenAI:
         """Choose model based on conversation complexity."""
@@ -55,13 +105,14 @@ class Lisa:
             return ChatOpenAI(model="gpt-5").bind_tools(tools)
 
 
-    def get_session(self, session_id):
-        return MongoDBChatMessageHistory(
-            session_id=session_id,
+    def get_session(self, chat_user_id, session_id):
+        session = MongoDBChatMessageHistory(
+            session_id=chat_user_id + ":" + session_id,
             connection_string=os.getenv("MONGO_URI"),
             database_name=os.getenv("MONGO_DATABASE"),
             collection_name="chat_histories",
         )
+        return session
 
     def prompt_template(self):
         prompt = ChatPromptTemplate.from_messages(
