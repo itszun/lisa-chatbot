@@ -243,6 +243,25 @@ def create_session():
         "created_at": created_at.isoformat()
     })
 
+from agent.lisa import Lisa
+import json
+@app.route("/api/chat2", methods=["POST"])
+def chat2():
+    data = request.get_json(force=True)
+    
+    user_field = (data.get("user") or "").strip()
+    user_msg = (data.get("message") or "").strip()
+    session_id = data.get("session_id").strip()
+    if session_id == "":
+        session_id = str(uuid4()) 
+
+    response = Lisa().chat(user_msg, session_id)
+    print("RESPONSE ======")
+    return jsonify({
+            "session_id": session_id,
+            "answer": response.text()
+        })
+
 
 @app.route("/api/chat", methods=["POST"])
 def chat():

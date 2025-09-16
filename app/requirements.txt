@@ -6,3 +6,7 @@ requests==2.32.3
 gunicorn
 pymongo
 chromadb
+langchain==1.0.0a5
+langchain-openai
+langchain-mongodb
+langchain-chroma
