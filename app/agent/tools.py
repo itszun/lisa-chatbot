@@ -130,6 +130,10 @@ def retrieve_data(collection_name: str, search: str) -> dict:
     Args:
         collection_name (str): Nama koleksi data yang akan dicari. Pilihan yang tersedia: "talent_pool", "job_openings", "users", "company", atau "candidates".
         search (str): Kata kunci pencarian.
+
+    Tip:
+        talent_id bisa dicari menggunakan chat_user_id
+        candidates bisa dicari menggunakan ID Job Opening dan ID Talent
     """
     from vectordb import Chroma
     print(f"Retrieve Data: search for \"{search}\" on \"{collection_name}\"")
@@ -214,7 +218,6 @@ def delete_talent(talent_id: int) -> dict:
 # ========== CANDIDATE MANAGEMENT ==========
 
 
-@tool
 def create_candidate(talent_id: int, job_opening_id: int, status: Optional[int] = None, **kwargs) -> dict:
     """
     Create a new candidate record, linking a talent to a job opening.
@@ -233,22 +236,38 @@ def create_candidate(talent_id: int, job_opening_id: int, status: Optional[int] 
 
 
 @tool
-def update_candidate(candidate_id: int, talent_id: Optional[int] = None, job_opening_id: Optional[int] = None, **kwargs) -> dict:
+def update_candidate(candidate_id: int, talent_id: int, job_opening_id:int, status) -> dict:
     """
     Update an existing candidate record.
 
+    Update status kandidat:
+        1 => 'Draft',
+        2 => 'Scouting',
+        100 => 'Screening',
+        101 => 'Finished Assesment',
+        102 => 'Interview',
+        201 => 'Shortlisted',
+        202 => 'Offering',
+        203 => 'Contract Accepted',
+        901 => 'Disinterest',
+        902 => 'Eliminated',
+        903 => 'Rejection'
+
     Args:
         candidate_id (int): ID unik dari kandidat yang akan diperbarui.
-        talent_id (int, optional): ID unik dari talent.
-        job_opening_id (int, optional): ID unik dari lowongan pekerjaan.
-        status (int, optional): Status kandidat (misalnya 1=Dihubungi, 2=Interview).
+        talent_id (int, optional): ID  talent.
+        job_opening_id (int, optional): ID Job Opening.
+        status (int, optional): Status 
         regist_at (str, optional): Waktu pendaftaran dalam format YYYY-MM-DD HH:MM:SS.
         interview_schedule (str, optional): Jadwal wawancara dalam format YYYY-MM-DD HH:MM:SS.
         notified_at (str, optional): Waktu pemberitahuan dalam format YYYY-MM-DD HH:MM:SS.
     """
-    payload = {k: v for k, v in kwargs.items() if v is not None}
-    if not payload:
-        return {"message": "Tidak ada data untuk diupdate."}
+    print("Update Candidate Status")    
+    payload = {
+        "talent_id": talent_id,
+        "job_opening_id": job_opening_id,
+        "status": status
+    }
     return relogin_once_on_401(_update_resource, "candidates", candidate_id, payload)
 
 
@@ -492,27 +511,93 @@ def generate_screening_question(job_description):
     Args:
         job_description: str - job description detail
     """
-    from agent.lisa import Lisa
+    from agent.screening_agent import ScreeningQuestionAgent
     from langchain_core.messages import HumanMessage
 
-    response = Lisa().invoke([
-        HumanMessage(content=("""> Given a job description:"""
-          f"{job_description}"
-          """> Based on above job description, craft 4 question for screening candidate.
-            """))
-    ])
+    response = ScreeningQuestionAgent().createQuestion(job_description)
     return response
 
 
+
+@tool
+def screening_a_talent(
+    talent_id,
+    chat_user_id, 
+    job_opening_id,
+    job_description,
+    talent_information,
+    ):
+    """Screening a Talent
+
+    Penawaran job_opening ke Talent, Memulai Screening ke Talent
+    Args: 
+        talent_id (int): ID Talent
+        talent_information (str): Desription about the talent
+        chat_user_id (str): chat_user_id of the Talent
+        job_opening_id (int): Job Opening ID
+        job_description (str): Job Opening description
+    """
+    from agent.screening_agent import ScreeningQuestionAgent
+    from langchain_core.messages import HumanMessage
+
+
+    print(("Screening Talent"
+           f"""chat_user_id: {chat_user_id}
+           talent_id: {talent_id}
+        job_description: {job_description}
+        talent_information: {talent_information}"""))
+    
+    steps = {
+        "create_candidate": 0,
+        "generate_screening_question": 0,
+        "intiate_chat": 0,
+    }
+    try:
+        create_candidate(
+            talent_id=talent_id, 
+            job_opening_id=job_opening_id, 
+            status=1)
+        steps["create_candidate"] = 1
+    except Exception as e:
+        raise RuntimeError("Gagal create candidate", e)
+
+    try:
+        screening_question = ScreeningQuestionAgent().createQuestion(job_description)
+        steps["generate_screening_question"] = 1
+    except Exception as e:
+        raise RuntimeError("Gagal create candidate", e)
+
+        
+    try:
+        response = ScreeningQuestionAgent().reachOutTalent(chat_user_id, job_description, screening_question.text(), talent_information)
+        steps["intiate_chat"] = 1
+    except Exception as e:
+        raise RuntimeError("Gagal create candidate", e)
+
+        
+    return steps
+
+@tool
+def evaluate_job_opening_progress(job_opening_id):
+    """
+    evaluate_job_opening_progress()
+
+    To know current state of job opening and continue process
+    """
+    from api_client import _get, BASE_URL, PANEL, _safe_json
+    url = f"{BASE_URL}/api/{PANEL}/job-openings/{job_opening_id}/evaluate"
+    r = _get(url)
+    data = _safe_json(r)
+    return data["data"] if isinstance(data, dict) and "data" in data else data
+
 tools = [
-    save_recall_memory,
-    search_recall_memories,
+    # save_recall_memory,
+    # search_recall_memories,
     initiate_contact,
     retrieve_data,
     create_talent,
     update_talent,
     delete_talent,
-    create_candidate,
     update_candidate,
     delete_candidate,
     create_company,
@@ -523,6 +608,7 @@ tools = [
     update_job_opening,
     delete_job_opening,
     fetch_user_data,
-    initiate_new_chat,
-    generate_screening_question
+    # initiate_new_chat,
+    screening_a_talent,
+    evaluate_job_opening_progress
 ]

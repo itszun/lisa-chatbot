@@ -245,25 +245,26 @@ def create_session():
 
 from agent.lisa import Lisa
 import json
-@app.route("/api/chat2", methods=["POST"])
+@app.route("/api/chat", methods=["POST"])
 def chat2():
     data = request.get_json(force=True)
     
     chat_user_id = (data.get("user") or "").strip()
     user_msg = (data.get("message") or "").strip()
-    session_id = data.get("session_id").strip()
+    session_id = (data.get("session_id") or "").strip()
     if session_id == "":
         session_id = str(uuid4()) 
 
     response = Lisa().chat(chat_user_id, user_msg, session_id)
     print("RESPONSE ======")
     return jsonify({
+            "user": chat_user_id,
             "session_id": session_id,
             "answer": response.text()
         })
 
 
-@app.route("/api/chat", methods=["POST"])
+@app.route("/api/chat2", methods=["POST"])
 def chat():
     from prompt import ContextDefiner
     data = request.get_json(force=True)
