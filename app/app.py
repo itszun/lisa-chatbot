@@ -172,7 +172,7 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/api/sessions", methods=["GET"])
+@app.route("/api/sessions2", methods=["GET"])
 def list_sessions():
     try:
         incoming_token = _extract_bearer_token(request)
@@ -248,20 +248,27 @@ import json
 @app.route("/api/chat", methods=["POST"])
 def chat2():
     data = request.get_json(force=True)
+    is_new = False
     
     chat_user_id = (data.get("user") or "").strip()
     user_msg = (data.get("message") or "").strip()
     session_id = (data.get("session_id") or "").strip()
     if session_id == "":
         session_id = str(uuid4()) 
+        is_new = True
 
-    response = Lisa().chat(chat_user_id, user_msg, session_id)
+    response = Lisa(is_new=is_new).chat(chat_user_id, user_msg, session_id)
     print("RESPONSE ======")
-    return jsonify({
-            "user": chat_user_id,
-            "session_id": session_id,
-            "answer": response.text()
-        })
+    response_data = {
+        "user": chat_user_id,
+        "session_id": session_id,
+        "answer": response.text(),
+    }
+
+    if is_new:
+        response_data["new_session_id"] = session_id
+
+    return jsonify(response_data)
 
 
 @app.route("/api/chat2", methods=["POST"])
@@ -379,8 +386,34 @@ def chat():
 
     return jsonify(response_data)
 
-
+@app.get("/api/sessions")
+def get_sessions2():
+    from vectordb import MongoProvider
+    user_field = (request.args.get("chat_user_id") or "").strip()
+    session_id = (request.args.get("session_id") or "").strip()
+    print(session_id)
+    result = MongoProvider().get_session({
+        "chat_user_id": user_field
+    })[0]
+    print("result")
+    print(result)
+    return jsonify(result)
+    
 @app.get("/api/session/messages")
+def get_session_messages2():
+    from vectordb import MongoProvider
+    user_field = (request.args.get("user") or "").strip()
+    session_id = (request.args.get("session_id") or "").strip()
+    print(session_id)
+    result = MongoProvider().get_session_messages({
+        "session_id": session_id
+    })[0]
+    result['messages'] = [json.loads(i) for i in result['messages']]
+    print("result")
+    print(result)
+    return jsonify(result)
+
+@app.get("/api/session/messages2")
 def get_session_messages():
     try:
         incoming_token = _extract_bearer_token(request)

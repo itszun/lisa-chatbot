@@ -1,3 +1,4 @@
+import uuid
 import os
 import json
 from langchain_mongodb.chat_message_histories import MongoDBChatMessageHistory
@@ -17,25 +18,29 @@ from prompt import ContextDefiner
 from dataclasses import dataclass
 from datetime import datetime
 
+
 @dataclass
 class UserContext:
     chat_user_id: str
     created_by: str
     # prompt_mode: str
 
-import uuid
+
 class Lisa:
     agent = {}
-    def __init__(self):
+    is_new = False
+
+    def __init__(self, is_new=False):
         print("LISA INITIATE")
+        self.is_new = is_new
 
     def initiate_chat(self, chat_user_id, prompt):
         session_id = str(uuid.uuid4())
-        print("LISA INITIATE CHAT: ", session_id) 
+        print("LISA INITIATE CHAT: ", session_id)
 
-        chat_session = self.get_session(chat_user_id, session_id);
-        
-        system_message = self.context_definer([HumanMessage(content=prompt)])
+        chat_session = self.get_session(chat_user_id, session_id)
+
+        system_message = self.context_definer(chat_user_id, [HumanMessage(content=prompt)])
 
         ai_message = self.ai_starter_template(system_message)
 
@@ -51,59 +56,60 @@ class Lisa:
         }
 
     def chat(self, chat_user_id, user_message, session_id):
+        chat_session = self.get_session(chat_user_id, session_id)
+
+        if(self.is_new):
+            messages = [HumanMessage(content=user_message,timestamp=str(datetime.now()))]
+            system_message = self.context_definer(chat_user_id, messages)
+            messages = [system_message, *messages]
+            chat_session.add_messages(messages)
+        else:        
+            chat_session.add_user_message(HumanMessage(content=user_message,timestamp=str(datetime.now())))
+            messages = chat_session.messages
+
         self.agent = create_agent(
             self.select_model,
             tools=tools,
             context_schema=UserContext,
-            prompt=self.dynamic_prompt,
         )
-
-        chat_session = self.get_session(chat_user_id, session_id)
-        print(chat_session.messages)
-
-        chat_session.add_user_message(HumanMessage(
-            content=user_message, timestamp=str(datetime.now())))
-        print("SESSION")
-        print(chat_session.messages)
-
         response = self.agent.invoke({
-            "messages": chat_session.messages
+            "messages": messages
         }, context=UserContext(chat_user_id, "user"))
+        print(":: Response")
+        print(response)
         ai_response = response['messages'][-1]
         chat_session.add_ai_message(ai_response)
+
+        self.session_titles(chat_user_id, session_id, chat_session.messages)
         return ai_response
-    
-    
-    def dynamic_prompt(self, state: AgentState, **kwargs):
-        isNew = False
-        messages = state['messages']
-        try:
-            messages[1]
-            return messages
-        except Exception as e:
-            isNew = True
-            
-        runtime = get_runtime(UserContext)
-        # Summarize Conversation
 
-        user_info = fetch_user_data.invoke({'chat_user_id':runtime.context.chat_user_id})
+    def session_titles(self, chat_user_id, session_id, messages):
+        print("MESSAGES", messages)
+        db = MongoProvider().client()['langchain_db']
+        collection = db.get_collection('user_session')
+        messages = [message_to_dict(message) for message in messages]
+        # Summarize Title
+        prompt = f"""Based on below conversation, generate short titles. max 60-80 words
+            Conversation:
+            {messages}"""
+        print(messages, prompt)
+        response = self.invoke([
+            HumanMessage(content=prompt)
+        ])
+        self.title = response.text()
+        collection.insert_one({
+            'chat_user_id': chat_user_id,
+            'session_id': session_id,
+            'SessionId': f"{chat_user_id}:{session_id}",
+            'title': self.title,
+            'created_at': str(datetime.now())
+        })
 
-        messages = [
-                *messages,
-                {"role": "user", "content": (
-                 """Berdasarkan Informasi User dan Pesan diatas, tentukan context prompt yang sesuai. Lalu gunakan tools retrieve_prompt """
-                 f"""About User: {user_info}"""
-                 )}
-            ]
-
-        system_msg = self.context_definer(messages)
-        messages = [system_msg] + state["messages"]
-        return messages
-    
     def ai_starter_template(self, system_message) -> AIMessage:
         response = ChatOpenAI().invoke([
             system_message,
-            HumanMessage(content="Mulai pembicaraan berdasarkan konteks diatas seolah kamu yang memulai percakapan ini")
+            HumanMessage(
+                content="Mulai pembicaraan berdasarkan konteks diatas seolah kamu yang memulai percakapan ini")
         ])
         return response
 
@@ -117,14 +123,24 @@ class Lisa:
 
         return response
 
-    
-    def context_definer(self, messages) -> SystemMessage:
+    def context_definer(self, chat_user_id, messages) -> SystemMessage:
+        user_info = fetch_user_data.invoke(
+            {'chat_user_id': chat_user_id})
+
+        messages = [
+            *messages,
+            {"role": "user", "content": (
+                """Berdasarkan Informasi User dan Pesan diatas, tentukan context prompt yang sesuai. Lalu gunakan tools retrieve_prompt """
+                f"""About User: {user_info}"""
+            )}
+        ]
+
         response = ChatOpenAI().bind_tools([retrieve_prompt]).invoke(messages)
 
         for tc in response.tool_calls:
             print("Tool Calls:", tc)
             fname = tc['name']
-            fargs = tc['args'];
+            fargs = tc['args']
             tool_result = globals()[fname].invoke(fargs)
             tool_message = ToolMessage(
                 content=tool_result,
@@ -134,11 +150,10 @@ class Lisa:
             print(tool_message)
             tool_message.text()
 
-
         return SystemMessage(
             content=tool_message.text()
         )
-        
+
     def select_model(self, state: AgentState, runtime: Runtime) -> ChatOpenAI:
         """Choose model based on conversation complexity."""
         messages = state["messages"]
@@ -148,7 +163,6 @@ class Lisa:
             return ChatOpenAI(model="gpt-4.1-mini").bind_tools(tools)
         else:
             return ChatOpenAI(model="gpt-5").bind_tools(tools)
-
 
     def get_session(self, chat_user_id, session_id):
         session = MongoDBChatMessageHistory(
@@ -188,4 +202,3 @@ class Lisa:
         )
 
     # This is where we configure the session id
-
