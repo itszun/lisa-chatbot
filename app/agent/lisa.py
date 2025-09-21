@@ -84,14 +84,17 @@ class Lisa:
         return ai_response
 
     def session_titles(self, chat_user_id, session_id, messages):
+        if self.is_new is False:
+            return
         print("MESSAGES", messages)
-        db = MongoProvider().client()['langchain_db']
+        db = MongoProvider().getDB()
         collection = db.get_collection('user_session')
         messages = [message_to_dict(message) for message in messages]
         # Summarize Title
-        prompt = f"""Based on below conversation, generate short titles. max 60-80 words
-            Conversation:
-            {messages}"""
+        prompt = f"""Buat judul singkat (maksimal 5 kata) untuk percakapan ini:
+            {messages}
+hiraukan programming literal
+respon dengan plain text"""
         print(messages, prompt)
         response = self.invoke([
             HumanMessage(content=prompt)
@@ -118,7 +121,7 @@ class Lisa:
         print(messages)
 
         sess = self.get_session("automated", str(uuid.uuid4()))
-        sess.aadd_messages(messages)
+        sess.add_messages(messages)
         sess.add_ai_message(response)
 
         return response
@@ -129,10 +132,10 @@ class Lisa:
 
         messages = [
             *messages,
-            {"role": "user", "content": (
+            HumanMessage(
                 """Berdasarkan Informasi User dan Pesan diatas, tentukan context prompt yang sesuai. Lalu gunakan tools retrieve_prompt """
                 f"""About User: {user_info}"""
-            )}
+            )
         ]
 
         response = ChatOpenAI().bind_tools([retrieve_prompt]).invoke(messages)

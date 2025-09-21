@@ -389,25 +389,36 @@ def chat():
 @app.get("/api/sessions")
 def get_sessions2():
     from vectordb import MongoProvider
-    user_field = (request.args.get("chat_user_id") or "").strip()
+    chat_user_id = (request.args.get("chat_user_id") or "").strip()
     session_id = (request.args.get("session_id") or "").strip()
     print(session_id)
     result = MongoProvider().get_session({
-        "chat_user_id": user_field
-    })[0]
-    print("result")
-    print(result)
-    return jsonify(result)
+        "chat_user_id": chat_user_id
+    })
+    if len(result) < 1:
+        return jsonify({
+            "chat_user_id": chat_user_id,
+            "sessions": []
+        })
+    
+    return jsonify(result[0])
     
 @app.get("/api/session/messages")
 def get_session_messages2():
     from vectordb import MongoProvider
-    user_field = (request.args.get("user") or "").strip()
+    chat_user_id = (request.args.get("user") or "").strip()
     session_id = (request.args.get("session_id") or "").strip()
     print(session_id)
     result = MongoProvider().get_session_messages({
         "session_id": session_id
-    })[0]
+    })
+    if len(result) < 1:
+        return jsonify({
+            'chat_user_id': chat_user_id,
+            'session_id': session_id,
+            'messages': []
+        })
+    result = result[0]
     result['messages'] = [json.loads(i) for i in result['messages']]
     print("result")
     print(result)

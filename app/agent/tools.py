@@ -368,12 +368,13 @@ def create_job_opening(company_id: int, title: str, body: Optional[str] = None, 
 
 
 @tool
-def update_job_opening(opening_id: int, company_id: Optional[int] = None, title: Optional[str] = None, body: Optional[str] = None, due_date: Optional[str] = None, status: Optional[int] = None, **kwargs) -> dict:
+def update_job_opening(job_opening_id: int, company_id: Optional[int] = None, title: Optional[str] = None, body: Optional[str] = None, due_date: Optional[str] = None, status: Optional[int] = None, **kwargs) -> dict:
     """
-    Update an existing job opening record.
+    Update an existing job opening.
+    Required job_opening_id, other field are optional
 
     Args:
-        opening_id (int): ID unik dari lowongan yang akan diperbarui.
+        job_opening_id (int): ID unik dari lowongan yang akan diperbarui.
         company_id (int, optional): ID unik dari perusahaan yang membuka lowongan.
         title (str, optional): Judul lowongan pekerjaan.
         body (str, optional): Deskripsi lengkap lowongan.
@@ -381,9 +382,10 @@ def update_job_opening(opening_id: int, company_id: Optional[int] = None, title:
         status (int, optional): Status lowongan (misalnya 1=Aktif, 0=Nonaktif).
     """
     payload = {k: v for k, v in kwargs.items() if v is not None}
+    print("UPDATE JOB OPENING", job_opening_id, kwargs)
     if not payload:
         return {"message": "Tidak ada data untuk diupdate."}
-    return relogin_once_on_401(_update_resource, "job-openings", opening_id, payload)
+    return relogin_once_on_401(_update_resource, "job-openings", job_opening_id, payload)
 
 
 @tool
@@ -472,10 +474,15 @@ def retrieve_prompt(context):
     """
     Mendapatkan context_prompt berdasarkan informasi user dan message nya
 
-    context: 
+    context options: 
+    
         HR_ASSISTANT for user is a company and asking about management of talent/candidate/job opening 
         TALENT_COMPANION for user is a talent and asking anything
         CHAT_INITIATOR for ai self-initiate chat without known context
+
+        DEFAULT_SYSTEM_PROMPT is equals HR_ASSISTANT
+
+    !! You can't choose outside the options
     """
     from prompt import TemplatePrompt
     print(context)
@@ -524,8 +531,9 @@ def screening_a_talent(
     talent_id,
     chat_user_id, 
     job_opening_id,
-    job_description,
+    job_opening_detail,
     talent_information,
+    chat_starter = "Hello"
     ):
     """Screening a Talent
 
@@ -535,16 +543,17 @@ def screening_a_talent(
         talent_information (str): Desription about the talent
         chat_user_id (str): chat_user_id of the Talent
         job_opening_id (int): Job Opening ID
-        job_description (str): Job Opening description
+        job_opening_detail (str): Job Opening detail (include company info, position, description)
+        chat_starter (str): Draft pesan pembuka/penawaran/job offer (gunakan markdown)
     """
     from agent.screening_agent import ScreeningQuestionAgent
-    from langchain_core.messages import HumanMessage
+    from langchain_core.messages import HumanMessage, AIMessage
 
 
     print(("Screening Talent"
            f"""chat_user_id: {chat_user_id}
            talent_id: {talent_id}
-        job_description: {job_description}
+        job_opening_detail: {job_opening_detail}
         talent_information: {talent_information}"""))
     
     steps = {
@@ -562,14 +571,15 @@ def screening_a_talent(
         raise RuntimeError("Gagal create candidate", e)
 
     try:
-        screening_question = ScreeningQuestionAgent().createQuestion(job_description)
+        screening_question = ScreeningQuestionAgent().createQuestion(job_opening_detail)
         steps["generate_screening_question"] = 1
     except Exception as e:
         raise RuntimeError("Gagal create candidate", e)
 
         
     try:
-        response = ScreeningQuestionAgent().reachOutTalent(chat_user_id, job_description, screening_question.text(), talent_information)
+        print(":: REACH OUT TALENT")
+        ScreeningQuestionAgent().reachOutTalent(chat_user_id, job_opening_detail, screening_question.text(), talent_information, AIMessage(chat_starter))
         steps["intiate_chat"] = 1
     except Exception as e:
         raise RuntimeError("Gagal create candidate", e)
@@ -593,7 +603,6 @@ def evaluate_job_opening_progress(job_opening_id):
 tools = [
     # save_recall_memory,
     # search_recall_memories,
-    initiate_contact,
     retrieve_data,
     create_talent,
     update_talent,

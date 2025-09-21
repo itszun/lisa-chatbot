@@ -59,15 +59,20 @@ class MongoProvider:
 
     _client = {}
     db_name = "chatbot_db"
+    database_name = ""
 
     def __init__(self):
         MONGO_URI = os.getenv("MONGO_URI")
         if not MONGO_URI:
             raise RuntimeError("MONGO_URI belum diisi.")
         self._client = MongoClient(MONGO_URI, server_api=ServerApi('1'))
+        self.database_name = os.getenv('MONGO_DATABASE')
 
     def client(self):
         return self._client
+    
+    def getDB(self):
+        return self.client()[self.database_name]
 
     def get_collection(self, collection_name):
         # Ambil database, kalau belum ada otomatis dibuat
@@ -77,6 +82,9 @@ class MongoProvider:
 
     def get_session(self, match_criteria):
         PIPELINE = [
+            {
+                '$sort': { "created_at": -1 } 
+            },
             {
                 '$group': {
                     "_id": '$chat_user_id',
@@ -99,11 +107,10 @@ class MongoProvider:
             },
             {
                 '$match': match_criteria
-            }
+            },
         ]
 
-        db = self.client()["langchain_db"]
-
+        db = self.getDB()
         collection = db.get_collection('user_session')
         result = list(collection.aggregate(PIPELINE))
         return result
@@ -150,8 +157,7 @@ class MongoProvider:
                 '$match': match_criteria
             }
         ]
-        db = self.client()["langchain_db"]
-
+        db = self.getDB()
         collection = db.get_collection('chat_histories')
         print("COLLECTION")
         print(collection)

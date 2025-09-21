@@ -8,14 +8,14 @@ import uuid
 class ScreeningQuestionAgent(Lisa):
     question_prompt = ("""You are a professional Talent Scout who do Screening"""
               """Based on this job description:"""
-              """{job_description}"""
+              """{job_opening_detail}"""
               """Write a list of relevant screening question to ask for a candidate. max: 3 question"""
               """"""
               )
     
     starter_message_prompt = ("""You are a professional Talent Scout who do Screening"""
               """Based on this job opening description:"""
-              """{job_description}"""
+              """{job_opening_detail}"""
               """Write a message to reach out a talent for that job"""
               """"""
               )
@@ -28,18 +28,18 @@ class ScreeningQuestionAgent(Lisa):
                         - when user confirmed assesment is finished, update candidate status to "101" (update_candidate) and trigger evaluate_job_opening_progress()
                         """
 
-                        """Job Description"""
-                        "{job_description}"
-                        """Screening Question:"""
+                        """\nJob Opening Details:\n"""
+                        "{job_opening_detail}"
+                        """\n\nScreening Question:\n"""
                         "{screening_question}"
-                        """Talent Information:"""
+                        """\n\nTalent Information:\n"""
                         "{talent_information}"
 
                         )
 
-    def createQuestion(self, job_description):
+    def createQuestion(self, job_opening_detail):
         prompt = PromptTemplate.from_template(self.question_prompt)
-        formatted_prompt = prompt.format(job_description=job_description)
+        formatted_prompt = prompt.format(job_opening_detail=job_opening_detail)
         messages = [
             HumanMessage(formatted_prompt)
         ]
@@ -51,55 +51,61 @@ class ScreeningQuestionAgent(Lisa):
 
         return response
     
-    def generateMessageStarter(self, job_description):
+    def generateMessageStarter(self, job_opening_detail):
         prompt = PromptTemplate.from_template(self.starter_message_prompt)
-        formatted_prompt = prompt.format(job_description=job_description)
+        formatted_prompt = prompt.format(job_opening_detail=job_opening_detail)
         messages = [
             HumanMessage(formatted_prompt)
         ]
         response = ChatOpenAI().invoke(messages)
+        messages = [*messages, response]
 
-        sess = self.get_session("automated", str(uuid.uuid4()))
+        session_id = str(uuid.uuid4())
+        sess = self.get_session("automated", session_id)
         sess.add_messages(messages)
-        sess.add_ai_message(response)
+
+        Lisa(True).session_titles("automated", session_id, messages)
 
         return response
 
     
-    def reachOutTalent(self, chat_user_id, job_description, screening_question, talent_information):
+    def reachOutTalent(self, chat_user_id, job_opening_detail, screening_question, talent_information, chat_starter):
         prompt = PromptTemplate.from_template(self.reach_out_prompt)
         formatted_prompt = prompt.format(
-            job_description=job_description,
+            job_opening_detail=job_opening_detail,
             screening_question=screening_question,
             talent_information=talent_information
         )
         messages = [
             SystemMessage(formatted_prompt)
         ]
-        response = ChatOpenAI().invoke(messages)
+        # chat_starter = ChatOpenAI().invoke(messages)
+        messages = [*messages, chat_starter]
 
-        sess = self.get_session(chat_user_id, str(uuid.uuid4()))
+        session_id = str(uuid.uuid4())
+        sess = self.get_session(chat_user_id, session_id)
         sess.add_messages(messages)
-        sess.add_ai_message(response)
 
-        return response
+        Lisa(True).session_titles(chat_user_id, session_id, messages)
+
+        return chat_starter
 
 
 
 @tool
-def generate_screening_question(job_description):
+def generate_screening_question(job_opening_detail):
     """Generate Screening Question for Candidate
 
     Required for crafting context prompt for TALENT_REACH_OUT
     Args:
-        job_description: str - job description detail
+        job_opening_detail: str - job description detail
     """
     from agent.lisa import Lisa
     from langchain_core.messages import HumanMessage
 
     response = Lisa().invoke([
         HumanMessage(content=("""> Given a job description:"""
-          f"{job_description}"
+          f"{job_opening_detail}"
           """> Based on above job description, craft 4 question for screening candidate.
             """))
     ])
