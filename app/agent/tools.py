@@ -614,11 +614,11 @@ def get_assessment_link(job_opening_id):
 @tool
 def initiate_a_new_chat(chat_user_id, system_prompt, chat_starter):
     """
-    Memulai sesi chat baru dengan chat_user_id
+    Memulai sesi chat baru dengan chat_user_id. setelah ini harus call push_notification
 
     Args:
         chat_user_id (str): ID user chat tujuan.
-        system_prompt (str): User prompt untuk memerintah konteks jelaskan detail asumsi, objective, persona, behaviour nya.
+        system_prompt (str): User prompt untuk memerintah konteks. Jelaskan detail asumsi, objective, persona, behaviour nya.
         chat_starter (str): Message pertama.
     """
     from agent.lisa import Lisa
@@ -632,6 +632,35 @@ def initiate_a_new_chat(chat_user_id, system_prompt, chat_starter):
         prompt=system_prompt, 
         ai_message=chat_starter,
         use_context_definer=False)
+    
+@tool
+def push_notification(chat_user_id, subject, body):
+    """
+    Push a notification to user. 
+
+    Args:
+        chat_user_id (str): Chat ID for target user
+        subject (str): max 50 char. short title text or short message for the notification
+        body (str): max 200 char. actual message/description about the notification. 
+    """
+    
+    print("=======================================================")
+    print("=======================================================")
+    print(f":: NOTIFICATION for \"{chat_user_id}\" with {subject} \n {body}")
+    print("=======================================================")
+    print("=======================================================")
+    from api_client import _post, BASE_URL, PANEL, _safe_json
+    url = f"{BASE_URL}/api/{PANEL}/notifications/push"
+    r = _post(url, json={
+        "chat_user_id": chat_user_id,
+        "subject": subject,
+        "body": body,
+    })
+    data = _safe_json(r)
+    result= data["data"] if isinstance(data, dict) and "data" in data else data
+    print("DATA", data)
+    print("RESULT", result)
+
 
 tools = [
     # save_recall_memory,
@@ -654,5 +683,6 @@ tools = [
     screening_a_talent,
     evaluate_job_opening_progress,
     get_assessment_link,
-    initiate_a_new_chat
+    initiate_a_new_chat,
+    push_notification
 ]

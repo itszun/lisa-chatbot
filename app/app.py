@@ -258,7 +258,7 @@ def chat2():
         is_new = True
 
     response = Lisa(is_new=is_new).chat(chat_user_id, user_msg, session_id)
-    print("RESPONSE ======")
+
     response_data = {
         "user": chat_user_id,
         "session_id": session_id,

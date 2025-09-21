@@ -46,7 +46,7 @@ S = requests.Session()
 if os.getenv("FORCE_BYPASS_PROXY", "false").lower() == "true":
     S.trust_env = False
 
-ACCESS_TOKEN: Optional[str] = None  # diisi setelah login/ensure_token
+ACCESS_TOKEN: Optional[str] = os.getenv("ACCESS_TOKEN")  # diisi setelah login/ensure_token
 
 # ===================== UTIL UMUM =====================
 def _safe_json(resp: requests.Response) -> Any:
@@ -59,6 +59,7 @@ def _auth_headers() -> Dict[str, str]:
     h = {"Accept": "application/json"}
     if ACCESS_TOKEN:
         h["Authorization"] = f"Bearer {ACCESS_TOKEN}"
+    print("AUTHORIZATION", h)
     return h
 
 def _get(url: str, **kw):
