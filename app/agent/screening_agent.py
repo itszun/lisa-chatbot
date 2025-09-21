@@ -4,6 +4,7 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.prompts import PromptTemplate
 from langchain_core.messages import SystemMessage, HumanMessage
 import uuid
+from prompt import TemplatePrompt as TP
 
 class ScreeningQuestionAgent(Lisa):
     question_prompt = ("""You are a professional Talent Scout who do Screening"""
@@ -27,6 +28,7 @@ class ScreeningQuestionAgent(Lisa):
                         - After all screening question answered, update candidate status to give Assesment Link (call: get_assessment_link)
                         - when user confirmed assesment is finished, update candidate status to "101" (update_candidate) and trigger evaluate_job_opening_progress()
                         """
+                        f"{TP.USE_MARKDOWN}"
 
                         """\nJob Opening Details:\n"""
                         "{job_opening_detail}"

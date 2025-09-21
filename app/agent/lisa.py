@@ -34,15 +34,19 @@ class Lisa:
         print("LISA INITIATE")
         self.is_new = is_new
 
-    def initiate_chat(self, chat_user_id, prompt):
+    def initiate_chat(self, chat_user_id, prompt, ai_message=None, use_context_definer=True):
         session_id = str(uuid.uuid4())
         print("LISA INITIATE CHAT: ", session_id)
 
         chat_session = self.get_session(chat_user_id, session_id)
 
-        system_message = self.context_definer(chat_user_id, [HumanMessage(content=prompt)])
-
-        ai_message = self.ai_starter_template(system_message)
+        if (use_context_definer):
+            system_message = self.context_definer(
+                chat_user_id, [HumanMessage(content=prompt)])
+            ai_message = self.ai_starter_template(system_message)
+        else:
+            system_message = SystemMessage(prompt)
+            ai_message = AIMessage(ai_message)
 
         messages = [
             system_message,
@@ -50,7 +54,7 @@ class Lisa:
         ]
         chat_session.add_messages(messages)
 
-        print(messages)
+        self.session_titles(chat_user_id, session_id, messages)
         return {
             "session_id": session_id,
         }
@@ -58,13 +62,15 @@ class Lisa:
     def chat(self, chat_user_id, user_message, session_id):
         chat_session = self.get_session(chat_user_id, session_id)
 
-        if(self.is_new):
-            messages = [HumanMessage(content=user_message,timestamp=str(datetime.now()))]
+        if (self.is_new):
+            messages = [HumanMessage(
+                content=user_message, timestamp=str(datetime.now()))]
             system_message = self.context_definer(chat_user_id, messages)
             messages = [system_message, *messages]
             chat_session.add_messages(messages)
-        else:        
-            chat_session.add_user_message(HumanMessage(content=user_message,timestamp=str(datetime.now())))
+        else:
+            chat_session.add_user_message(HumanMessage(
+                content=user_message, timestamp=str(datetime.now())))
             messages = chat_session.messages
 
         self.agent = create_agent(

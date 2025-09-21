@@ -123,13 +123,14 @@ def initiate_contact(talent_id: int, talent_name: str, chat_user_id: str, job_op
 
 
 @tool
-def retrieve_data(collection_name: str, search: str) -> dict:
+def retrieve_data(collection_name: str, search: str, max_result: int = 100) -> dict:
     """
     Gunakan tool ini untuk mendapatkan data terkait Job Opening, Talent, Company, User, dan Candidate.
 
     Args:
         collection_name (str): Nama koleksi data yang akan dicari. Pilihan yang tersedia: "talent_pool", "job_openings", "users", "company", atau "candidates".
         search (str): Kata kunci pencarian.
+        max_result (int): N-Result/how many results to return
 
     Tip:
         talent_id bisa dicari menggunakan chat_user_id
@@ -141,7 +142,7 @@ def retrieve_data(collection_name: str, search: str) -> dict:
         collection = Chroma().client().get_or_create_collection(name=collection_name)
         results = collection.query(
             query_texts=[search],  # Chroma will embed this for you
-            n_results=5  # how many results to return
+            n_results=max_result  # how many results to return
         )
         return results
     except Exception as error:
@@ -600,6 +601,38 @@ def evaluate_job_opening_progress(job_opening_id):
     data = _safe_json(r)
     return data["data"] if isinstance(data, dict) and "data" in data else data
 
+@tool
+def get_assessment_link(job_opening_id):
+    """
+    get_assessment_link()
+
+    Get Assessment Link
+    """
+    return f"assessment.altateknologi.com/{job_opening_id}";
+
+
+@tool
+def initiate_a_new_chat(chat_user_id, system_prompt, chat_starter):
+    """
+    Memulai sesi chat baru dengan chat_user_id
+
+    Args:
+        chat_user_id (str): ID user chat tujuan.
+        system_prompt (str): User prompt untuk memerintah konteks jelaskan detail asumsi, objective, persona, behaviour nya.
+        chat_starter (str): Message pertama.
+    """
+    from agent.lisa import Lisa
+    print("=======================================================")
+    print("=======================================================")
+    print(f":: INITIATE A NEW CHAT for \"{chat_user_id}\"")
+    print("=======================================================")
+    print("=======================================================")
+    Lisa(True).initiate_chat(
+        chat_user_id, 
+        prompt=system_prompt, 
+        ai_message=chat_starter,
+        use_context_definer=False)
+
 tools = [
     # save_recall_memory,
     # search_recall_memories,
@@ -619,5 +652,7 @@ tools = [
     fetch_user_data,
     # initiate_new_chat,
     screening_a_talent,
-    evaluate_job_opening_progress
+    evaluate_job_opening_progress,
+    get_assessment_link,
+    initiate_a_new_chat
 ]
