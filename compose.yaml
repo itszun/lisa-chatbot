@@ -20,6 +20,7 @@ services:
       - DB_USER=root
       - DB_PASS=s3cure
       - MONGO_URI=mongodb://root:s3cure@mongo:27017/
+      - MONGO_DATABASE=langchain_db_3
 
   mongo:
       image: mongo
