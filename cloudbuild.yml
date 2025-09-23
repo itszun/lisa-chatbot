@@ -1,0 +1,13 @@
+steps:
+# Step 1: Build the 'app' service image
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-t', 'gcr.io/$PROJECT_ID/lisa-app:latest', './app']
+
+# Step 2: Build the 'web' (nginx) service image
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-t', 'gcr.io/$PROJECT_ID/lisa-nginx:latest', './nginx']
+
+# Push both images to Google Container Registry
+images:
+- 'gcr.io/$PROJECT_ID/lisa-app:latest'
+- 'gcr.io/$PROJECT_ID/lisa-nginx:latest'
