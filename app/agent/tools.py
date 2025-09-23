@@ -123,21 +123,25 @@ def initiate_contact(talent_id: int, talent_name: str, chat_user_id: str, job_op
 
 
 @tool
-def retrieve_data(collection_name: str, search: str, max_result: int = 100) -> dict:
+def retrieve_data(collection_name: str, search: str, max_result: int = 10) -> dict:
     """
     Gunakan tool ini untuk mendapatkan data terkait Job Opening, Talent, Company, User, dan Candidate.
 
     Args:
         collection_name (str): Nama koleksi data yang akan dicari. Pilihan yang tersedia: "talent_pool", "job_openings", "users", "company", atau "candidates".
         search (str): Kata kunci pencarian.
-        max_result (int): N-Result/how many results to return
+        max_result (int): N-Result/how many results to return (max result tobe )
 
     Tip:
         talent_id bisa dicari menggunakan chat_user_id
         candidates bisa dicari menggunakan ID Job Opening dan ID Talent
     """
+    max = 10;
     from vectordb import Chroma
     print(f"Retrieve Data: search for \"{search}\" on \"{collection_name}\"")
+    if(max_result > max):
+        raise RuntimeError("Can't retrieve more than ")
+    
     try:
         collection = Chroma().client().get_or_create_collection(name=collection_name)
         results = collection.query(
