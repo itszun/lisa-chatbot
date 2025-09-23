@@ -11,3 +11,6 @@ steps:
 images:
 - 'gcr.io/$PROJECT_ID/lisa-app:latest'
 - 'gcr.io/$PROJECT_ID/lisa-nginx:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
