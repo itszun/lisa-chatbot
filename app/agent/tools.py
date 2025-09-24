@@ -17,6 +17,14 @@ from typing import Optional, List, Dict, Any
 from openai import OpenAI, RateLimitError
 import os
 
+from vectordb import Chroma
+import json
+from agent.lisa import Lisa
+from prompt import TemplatePrompt
+from agent.screening_agent import ScreeningQuestionAgent
+from api_client import _get, _post, BASE_URL, PANEL, _safe_json
+
+
 _helpers = {
     "get_or_create_chat_doc": None,
     "append_session": None,
@@ -29,10 +37,6 @@ def set_helpers(get_or_create_chat_doc, append_session, default_system_prompt):
     _helpers["append_session"] = append_session
     _helpers["DEFAULT_SYSTEM_PROMPT"] = default_system_prompt
 
-
-# Import API client functions
-
-# Start new chat is an internal function, not a tool
 
 def start_new_chat(chat_user_id: str, system_prompt: str, initial_message: str) -> dict:
     try:
@@ -97,7 +101,6 @@ def initiate_contact(talent_id: int, talent_name: str, chat_user_id: str, job_op
         job_opening_id (int): ID dari lowongan pekerjaan yang relevan.
         initial_message (str): Isi pesan pertama yang sudah disetujui pengguna.
     """
-    from prompt import TemplatePrompt
     try:
         print(
             f"Attempt to initiate contact to {chat_user_id} [{talent_id}/{talent_name}] untuk {job_opening_id}")
@@ -137,7 +140,6 @@ def retrieve_data(collection_name: str, search: str, max_result: int = 5) -> dic
         candidates bisa dicari menggunakan ID Job Opening dan ID Talent
     """
     max = 5;
-    from vectordb import Chroma
     print(f"Retrieve Data: search for \"{search}\" on \"{collection_name}\"")
     if(max_result > max):
         raise RuntimeError("Can't retrieve more than ")
@@ -446,8 +448,6 @@ def fetch_user_data(chat_user_id: str) -> str:
 
     Untuk pertanyaan "Siapa nama ku"
     """
-    from vectordb import Chroma
-    import json
 
     print(f":: Fetch User Data\n {chat_user_id}")
 
@@ -489,7 +489,6 @@ def retrieve_prompt(context):
 
     !! You can't choose outside the options
     """
-    from prompt import TemplatePrompt
     print(context)
     return getattr(TemplatePrompt, context)
 
@@ -509,8 +508,6 @@ def initiate_new_chat(recipient, trigger_prompt):
         recipient: str - chat_user_id of the recipient
         trigger_prompt: str - prompt to initiate to define context and session topic/prompt
     """
-    from agent.lisa import Lisa
-
     Lisa().initiate_chat(recipient, trigger_prompt)
     pass
 
@@ -523,8 +520,6 @@ def generate_screening_question(job_description):
     Args:
         job_description: str - job description detail
     """
-    from agent.screening_agent import ScreeningQuestionAgent
-    from langchain_core.messages import HumanMessage
 
     response = ScreeningQuestionAgent().createQuestion(job_description)
     return response
@@ -551,8 +546,6 @@ def screening_a_talent(
         job_opening_detail (str): Job Opening detail (include company info, position, description)
         chat_starter (str): Draft pesan pembuka/penawaran/job offer (gunakan markdown)
     """
-    from agent.screening_agent import ScreeningQuestionAgent
-    from langchain_core.messages import HumanMessage, AIMessage
 
 
     print(("Screening Talent"
@@ -599,7 +592,6 @@ def evaluate_job_opening_progress(job_opening_id):
 
     To know current state of job opening and continue process
     """
-    from api_client import _get, BASE_URL, PANEL, _safe_json
     url = f"{BASE_URL}/api/{PANEL}/job-openings/{job_opening_id}/evaluate"
     r = _get(url)
     data = _safe_json(r)
@@ -625,7 +617,6 @@ def initiate_a_new_chat(chat_user_id, system_prompt, chat_starter):
         system_prompt (str): User prompt untuk memerintah konteks. Jelaskan detail asumsi, objective, persona, behaviour nya.
         chat_starter (str): Message pertama.
     """
-    from agent.lisa import Lisa
     print("=======================================================")
     print("=======================================================")
     print(f":: INITIATE A NEW CHAT for \"{chat_user_id}\"")
@@ -653,7 +644,6 @@ def push_notification(chat_user_id, subject, body):
     print(f":: NOTIFICATION for \"{chat_user_id}\" with {subject} \n {body}")
     print("=======================================================")
     print("=======================================================")
-    from api_client import _post, BASE_URL, PANEL, _safe_json
     url = f"{BASE_URL}/api/{PANEL}/notifications/push"
     r = _post(url, json={
         "chat_user_id": chat_user_id,
