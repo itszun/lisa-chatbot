@@ -24,68 +24,6 @@ from agent.screening_agent import ScreeningQuestionAgent
 from api_client import _get, _post, BASE_URL, PANEL, _safe_json
 from agent.sub_agent import SubAgent
 
-_helpers = {
-    "get_or_create_chat_doc": None,
-    "append_session": None,
-    "DEFAULT_SYSTEM_PROMPT": "Anda adalah asisten AI."
-}
-
-
-def set_helpers(get_or_create_chat_doc, append_session, default_system_prompt):
-    _helpers["get_or_create_chat_doc"] = get_or_create_chat_doc
-    _helpers["append_session"] = append_session
-    _helpers["DEFAULT_SYSTEM_PROMPT"] = default_system_prompt
-
-
-def start_new_chat(chat_user_id: str, system_prompt: str, initial_message: str) -> dict:
-    try:
-        _helpers["get_or_create_chat_doc"](
-            userid=chat_user_id,
-            name=chat_user_id
-        )
-
-        new_session_id = str(uuid4())
-        created_at = datetime.now(timezone.utc)
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "assistant", "content": initial_message},
-        ]
-
-        OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-        if not OPENAI_API_KEY:
-            raise RuntimeError("OPENAI_API_KEY belum diisi.")
-        client = OpenAI(api_key=OPENAI_API_KEY)
-
-        title = (client.chat.completions.create(
-            model="gpt-4o", messages=[
-                *messages,
-                {"role": "user",
-                 "content": f"Buat judul singkat (maksimal 5 kata) untuk percakapan ini"}
-            ],
-            temperature=0.2, max_tokens=20
-        ).choices[0].message.content or "Percakapan Baru").strip().replace('"', '')
-
-        _helpers["append_session"](
-            name=chat_user_id,
-            session_id=new_session_id,
-            created_at=created_at,
-            messages=messages,
-            title=title
-        )
-
-        return {
-            "success": True,
-            "message": f"Sesi chat baru dengan {chat_user_id} berhasil dibuat.",
-            "session_id": new_session_id
-        }
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
-
-# ========== CONVERTED TOOLS (MENGGUNAKAN DEKORATOR @tool) ==========
-
 
 @tool
 def initiate_contact(talent_id: int, talent_name: str, chat_user_id: str, job_opening_id: int, initial_message: str) -> dict:

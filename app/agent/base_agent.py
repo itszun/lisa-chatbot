@@ -16,7 +16,7 @@ from langchain_core.vectorstores import InMemoryVectorStore
 from langgraph.runtime import get_runtime
 from dataclasses import dataclass
 from datetime import datetime
-
+from tools_registry import Helper
 
 @dataclass
 class UserContext:
@@ -28,10 +28,12 @@ class UserContext:
 class BaseLisa:
     agent = {}
     is_new = False
+    tools = []
 
     def __init__(self, is_new=False):
         print("LISA INITIATE")
         self.is_new = is_new
+        self.tools = Helper.get_helpers("tools")
 
     def initiate_chat(self, chat_user_id, prompt, ai_message=None, use_context_definer=True):
         session_id = str(uuid.uuid4())
@@ -74,7 +76,7 @@ class BaseLisa:
 
         self.agent = create_agent(
             self.select_model,
-            tools=tools,
+            tools=self.tools,
             context_schema=UserContext,
             verbose=True
         )
@@ -134,7 +136,7 @@ respon dengan plain text"""
         return response
 
     def context_definer(self, chat_user_id, messages) -> SystemMessage:
-        user_info = fetch_user_data.invoke(
+        user_info = Helper().get('fetch_user_data').invoke(
             {'chat_user_id': chat_user_id})
 
         messages = [
@@ -145,7 +147,7 @@ respon dengan plain text"""
             )
         ]
 
-        response = ChatOpenAI().bind_tools([retrieve_prompt]).invoke(messages)
+        response = ChatOpenAI().bind_tools([Helper.get('retrieve_prompt')]).invoke(messages)
 
         for tc in response.tool_calls:
             print("Tool Calls:", tc)
@@ -170,9 +172,9 @@ respon dengan plain text"""
         message_count = len(messages)
 
         if message_count < 10:
-            return ChatOpenAI(model="gpt-4.1-mini").bind_tools(tools)
+            return ChatOpenAI(model="gpt-4.1-mini").bind_tools(Helper.get('tools'))
         else:
-            return ChatOpenAI(model="gpt-5").bind_tools(tools)
+            return ChatOpenAI(model="gpt-5").bind_tools(Helper.get('tools'))
 
     def get_session(self, chat_user_id, session_id):
         session = MongoDBChatMessageHistory(

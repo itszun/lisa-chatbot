@@ -16,11 +16,17 @@ from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 from api_client import ensure_token, get_talent_detail, get_company_detail
 from prompt import TemplatePrompt
+from agent.lisa import Lisa
+import json
+from agent.tools import tools, retrieve_prompt, fetch_user_data
 
 # ======================================================================
 # KONFIGURASI UMUM
 # ======================================================================
 MAX_HISTORY_MESSAGES = 100
+
+from tools_registry import Helper
+Helper(tools, retrieve_prompt, fetch_user_data)
 
 load_dotenv()
 
@@ -131,9 +137,6 @@ def create_session():
         "title": default_title,
         "created_at": created_at.isoformat()
     })
-
-from agent.lisa import Lisa
-import json
 @app.route("/api/chat", methods=["POST"])
 def chat2():
     data = request.get_json(force=True)
