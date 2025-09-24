@@ -1,5 +1,6 @@
 # app.py (Versi Final Tanpa Validasi Awal)
 # -*- coding: utf-8 -*-
+from tools_registry import Helper
 from feeder import Feeder
 from dataclasses import dataclass
 import os
@@ -25,8 +26,9 @@ from agent.tools import tools, retrieve_prompt, fetch_user_data
 # ======================================================================
 MAX_HISTORY_MESSAGES = 100
 
-from tools_registry import Helper
-Helper(tools, retrieve_prompt, fetch_user_data)
+Helper().register(tools=tools,
+                  retrieve_prompt=retrieve_prompt,
+                  fetch_user_data=fetch_user_data)
 
 load_dotenv()
 
@@ -96,6 +98,7 @@ def _extract_bearer_token(req) -> str:
 def index():
     return render_template("index.html")
 
+
 @app.route("/api/sessions", methods=["POST"])
 def create_session():
     data = request.get_json(force=True)
@@ -137,16 +140,18 @@ def create_session():
         "title": default_title,
         "created_at": created_at.isoformat()
     })
+
+
 @app.route("/api/chat", methods=["POST"])
 def chat2():
     data = request.get_json(force=True)
     is_new = False
-    
+
     chat_user_id = (data.get("user") or "").strip()
     user_msg = (data.get("message") or "").strip()
     session_id = (data.get("session_id") or "").strip()
     if session_id == "":
-        session_id = str(uuid4()) 
+        session_id = str(uuid4())
         is_new = True
 
     response = Lisa(is_new=is_new).chat(chat_user_id, user_msg, session_id)
@@ -177,9 +182,10 @@ def get_sessions2():
             "chat_user_id": chat_user_id,
             "sessions": []
         })
-    
+
     return jsonify(result[0])
-    
+
+
 @app.get("/api/session/messages")
 def get_session_messages2():
     from vectordb import MongoProvider
