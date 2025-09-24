@@ -77,7 +77,6 @@ class BaseLisa:
             self.select_model,
             tools=self.tools,
             context_schema=UserContext,
-            verbose=True
         )
         print(":: AGENT INVOKE ")
         response = self.agent.invoke({
