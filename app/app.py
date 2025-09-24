@@ -1,12 +1,9 @@
 # app.py (Versi Final Tanpa Validasi Awal)
 # -*- coding: utf-8 -*-
 from feeder import Feeder
-from tools_registry import tools as TOOLS_SPEC, available_functions as AVAILABLE_FUNCS, set_helpers
 from dataclasses import dataclass
 import os
 import json
-import time
-import traceback
 from uuid import uuid4
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -84,8 +81,6 @@ def _extract_bearer_token(req) -> str:
 # untuk mengakses fungsi get_or_create_chat_doc dan append_session
 # tanpa membuat dependensi melingkar.
 # kenapa? Karena tools_registry.py perlu mengakses MongoDB
-set_helpers(TemplatePrompt.DEFAULT_SYSTEM_PROMPT)
-
 # ======================================================================
 # ROUTES
 # ======================================================================
