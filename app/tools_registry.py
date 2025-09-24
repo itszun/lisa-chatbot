@@ -8,9 +8,10 @@ from pattern_decorator import singleton
 class Helper():
   _helpers = {}
 
-  def __init__(self, tools):
+  def __init__(self, tools, **kwargs):
       self._helpers = {
-          "tools": tools
+          "tools": tools,
+          **kwargs
       }
 
   def set_helpers(self, **kwargs):
