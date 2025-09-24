@@ -1,12 +1,12 @@
 from langchain_core.tools import tool
-from agent.lisa import Lisa
+from agent.base_agent import BaseLisa
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.prompts import PromptTemplate
 from langchain_core.messages import SystemMessage, HumanMessage
 import uuid
 from prompt import TemplatePrompt as TP
 
-class ScreeningQuestionAgent(Lisa):
+class ScreeningQuestionAgent(BaseLisa):
     question_prompt = ("""You are a professional Talent Scout who do Screening"""
               """Based on this job description:"""
               """{job_opening_detail}"""

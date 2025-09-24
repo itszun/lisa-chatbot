@@ -16,7 +16,7 @@ from langchain_core.vectorstores import InMemoryVectorStore
 from langgraph.runtime import get_runtime
 from dataclasses import dataclass
 from datetime import datetime
-from agent.base_agent import BaseLisa
+
 
 @dataclass
 class UserContext:
@@ -25,7 +25,7 @@ class UserContext:
     # prompt_mode: str
 
 
-class Lisa(BaseLisa):
+class BaseLisa:
     agent = {}
     is_new = False
 

@@ -19,11 +19,10 @@ import os
 
 from vectordb import Chroma
 import json
-from agent.lisa import Lisa
 from prompt import TemplatePrompt
 from agent.screening_agent import ScreeningQuestionAgent
 from api_client import _get, _post, BASE_URL, PANEL, _safe_json
-
+from agent.sub_agent import SubAgent
 
 _helpers = {
     "get_or_create_chat_doc": None,
@@ -508,7 +507,7 @@ def initiate_new_chat(recipient, trigger_prompt):
         recipient: str - chat_user_id of the recipient
         trigger_prompt: str - prompt to initiate to define context and session topic/prompt
     """
-    Lisa().initiate_chat(recipient, trigger_prompt)
+    SubAgent().initiate_chat(recipient, trigger_prompt)
     pass
 
 
@@ -622,7 +621,7 @@ def initiate_a_new_chat(chat_user_id, system_prompt, chat_starter):
     print(f":: INITIATE A NEW CHAT for \"{chat_user_id}\"")
     print("=======================================================")
     print("=======================================================")
-    Lisa(True).initiate_chat(
+    SubAgent(True).initiate_chat(
         chat_user_id, 
         prompt=system_prompt, 
         ai_message=chat_starter,
