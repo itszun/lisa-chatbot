@@ -123,7 +123,7 @@ def initiate_contact(talent_id: int, talent_name: str, chat_user_id: str, job_op
 
 
 @tool
-def retrieve_data(collection_name: str, search: str, max_result: int = 10) -> dict:
+def retrieve_data(collection_name: str, search: str, max_result: int = 5) -> dict:
     """
     Gunakan tool ini untuk mendapatkan data terkait Job Opening, Talent, Company, User, dan Candidate.
 
@@ -136,7 +136,7 @@ def retrieve_data(collection_name: str, search: str, max_result: int = 10) -> di
         talent_id bisa dicari menggunakan chat_user_id
         candidates bisa dicari menggunakan ID Job Opening dan ID Talent
     """
-    max = 10;
+    max = 5;
     from vectordb import Chroma
     print(f"Retrieve Data: search for \"{search}\" on \"{collection_name}\"")
     if(max_result > max):
