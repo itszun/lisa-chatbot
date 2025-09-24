@@ -14,7 +14,6 @@ from vectordb import Chroma, MongoProvider
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.vectorstores import InMemoryVectorStore
 from langgraph.runtime import get_runtime
-from prompt import ContextDefiner
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -77,7 +76,9 @@ class Lisa:
             self.select_model,
             tools=tools,
             context_schema=UserContext,
+            verbose=True
         )
+        print(":: AGENT INVOKE ")
         response = self.agent.invoke({
             "messages": messages
         }, context=UserContext(chat_user_id, "user"))
