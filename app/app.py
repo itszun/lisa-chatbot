@@ -7,20 +7,16 @@ import os
 import json
 from uuid import uuid4
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-from openai import OpenAI, RateLimitError
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
-from api_client import ensure_token, get_talent_detail, get_company_detail
+from api_client import ensure_token
 from prompt import TemplatePrompt
 from agent.lisa import Lisa
 import json
 from agent.tools import tools, retrieve_prompt, fetch_user_data
-
+from logs import setup_logging
 # ======================================================================
 # KONFIGURASI UMUM
 # ======================================================================
@@ -31,14 +27,11 @@ Helper().register(tools=tools,
                   fetch_user_data=fetch_user_data)
 
 load_dotenv()
+setup_logging()
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app, resources={r"/*": {"origins": "*"}})
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY belum diisi.")
-client = OpenAI(api_key=OPENAI_API_KEY)
+app.logger.info("Running Flask")
 
 MONGO_URI = os.getenv("MONGO_URI")
 if not MONGO_URI:
@@ -69,77 +62,10 @@ def parse_user(user_field: str) -> User:
         raise ValueError("userid atau nama tidak boleh kosong.")
     return User(userid=user_field, name=user_field)
 
-# Memperbarui pesan dalam sesi yang ada di mongo berdasarkan name dan session_id
-# Gunakan 'name' sebagai kunci utama.
-
-# Ekstrak token Bearer dari header Authorization
-
-
-def _extract_bearer_token(req) -> str:
-    auth = (req.headers.get("Authorization") or "").strip()
-    if auth.lower().startswith("bearer "):
-        return auth.split(" ", 1)[1].strip()
-    return ""
-
-
-# ======================================================================
-# IMPORT TOOLS + INJEKSI HELPER
-# ======================================================================
-# Injeksi helper dari app.py ke tools_registry.py
-# untuk mengakses fungsi get_or_create_chat_doc dan append_session
-# tanpa membuat dependensi melingkar.
-# kenapa? Karena tools_registry.py perlu mengakses MongoDB
-# ======================================================================
-# ROUTES
-# ======================================================================
-
 
 @app.route("/")
 def index():
     return render_template("index.html")
-
-
-@app.route("/api/sessions", methods=["POST"])
-def create_session():
-    data = request.get_json(force=True)
-    try:
-        incoming_token = _extract_bearer_token(request)
-        if incoming_token:
-            ensure_token(preferred_token=incoming_token)
-    except Exception as e:
-        return jsonify({"error": f"Auth Admin API gagal: {str(e)}"}), 401
-
-    user_field = (data.get("user") or "").strip()
-    system_prompt = data.get(
-        "system_prompt") or TemplatePrompt.DEFAULT_SYSTEM_PROMPT
-
-    personalized_greeting = f"Hai {user_field}, adakah yang bisa saya bantu?"
-
-    # PANGGIL DENGAN DUA PARAMETER
-    _ = get_or_create_chat_doc(name=user_field)
-
-    new_sid = str(uuid4())
-    created_at = datetime.now(timezone.utc)
-    default_title = "Percakapan Baru"
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "assistant", "content": personalized_greeting},
-    ]
-
-    # PANGGIL DENGAN NAME
-    append_session(
-        name=user_field,
-        session_id=new_sid,
-        created_at=created_at,
-        messages=messages,
-        title=default_title
-    )
-    return jsonify({
-        "name": user_field,
-        "session_id": new_sid,
-        "title": default_title,
-        "created_at": created_at.isoformat()
-    })
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -154,7 +80,15 @@ def chat2():
         session_id = str(uuid4())
         is_new = True
 
-    response = Lisa(is_new=is_new).chat(chat_user_id, user_msg, session_id)
+    try:
+        response = Lisa(is_new=is_new).chat(chat_user_id, user_msg, session_id)
+    except Exception as e:
+        return jsonify({
+            "user": chat_user_id,
+            "session_id": session_id,
+            "answer": "Terjadi Kesalahan",
+        })
+
 
     response_data = {
         "user": chat_user_id,

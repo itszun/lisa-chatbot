@@ -1,91 +1,43 @@
-
-
-import tiktoken
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.documents import Document
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_core.vectorstores import InMemoryVectorStore
-from langchain_core.runnables import RunnableConfig
 from api_client import (
     retrieve_data, relogin_once_on_401,
     _update_resource, _delete_resource, _create_resource
 )
 from langchain_core.tools import tool
-from uuid import uuid4
-from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
-from openai import OpenAI, RateLimitError
-import os
 
 from vectordb import Chroma
 import json
-from prompt import TemplatePrompt
+from pydantic import BaseModel, Field
 from agent.screening_agent import ScreeningQuestionAgent
 from api_client import _get, _post, BASE_URL, PANEL, _safe_json
 from agent.sub_agent import SubAgent
+from prompt import TemplatePrompt
 
+from langchain_core.messages.ai import AIMessage
 
-@tool
-def initiate_contact(talent_id: int, talent_name: str, chat_user_id: str, job_opening_id: int, initial_message: str) -> dict:
+class RetrieveDataInput(BaseModel):
+    """Schema input untuk pencarian data menggunakan Vector Database."""
+    collection_name: str = Field(
+        ..., 
+        description='Nama koleksi data: "talent_pool", "job_openings", "users", "company", atau "candidates".'
+    )
+    search: str = Field(..., description="Kata kunci/query untuk pencarian (dapat berupa kalimat lengkap).")
+    max_result: int = Field(5, description="Jumlah hasil yang ingin dikembalikan (maksimum 5).")
+
+@tool(args_schema=RetrieveDataInput)
+def retrieve_data(input: RetrieveDataInput) -> dict:
     """
-    Mendaftarkan talent sebagai kandidat untuk sebuah lowongan DAN memulai sesi chat baru.
-    Ini adalah tool utama untuk kontak awal.
-
-    Args:
-        talent_id (int): ID dari talent yang dihubungi.
-        talent_name (str): Nama dari talent yang dihubungi.
-        chat_user_id (str): ID chat milik talent, misalnya "id@user_name".
-        job_opening_id (int): ID dari lowongan pekerjaan yang relevan.
-        initial_message (str): Isi pesan pertama yang sudah disetujui pengguna.
+    Mencari data terkait Job Opening, Talent, Company, User, dan Candidate menggunakan Vector DB (Chroma).
+    Gunakan untuk mendapatkan detail objek berdasarkan deskripsi atau ID yang tidak diketahui.
     """
-    try:
-        print(
-            f"Attempt to initiate contact to {chat_user_id} [{talent_id}/{talent_name}] untuk {job_opening_id}")
-
-        # Langkah 1: Daftarkan sebagai kandidat
-        candidate_result = create_candidate(
-            talent_id=talent_id, job_opening_id=job_opening_id, status=1)
-        if "error" in (candidate_result or {}):
-            return {"success": False, "error": f"Gagal membuat kandidat: {candidate_result['error']}"}
-
-        # Langkah 2: Jika berhasil, mulai sesi chat
-        chat_result = start_new_chat(
-            chat_user_id=chat_user_id,
-            system_prompt=TemplatePrompt.TALENT_SCOUTING_SCREENING,
-            initial_message=initial_message)
-        if not chat_result.get("success"):
-            return {"success": False, "error": f"Kandidat dibuat, tapi gagal memulai chat: {chat_result['error']}"}
-
-        return {"success": True, "message": f"Talent {chat_user_id} berhasil didaftarkan sebagai kandidat dan pesan pertama telah dikirim."}
-
-    except Exception as e:
-        return {"success": False, "error": f"Terjadi kesalahan tak terduga: {str(e)}"}
-
-
-@tool
-def retrieve_data(collection_name: str, search: str, max_result: int = 5) -> dict:
-    """
-    Gunakan tool ini untuk mendapatkan data terkait Job Opening, Talent, Company, User, dan Candidate.
-
-    Args:
-        collection_name (str): Nama koleksi data yang akan dicari. Pilihan yang tersedia: "talent_pool", "job_openings", "users", "company", atau "candidates".
-        search (str): Kata kunci pencarian.
-        max_result (int): N-Result/how many results to return (max result tobe )
-
-    Tip:
-        talent_id bisa dicari menggunakan chat_user_id
-        candidates bisa dicari menggunakan ID Job Opening dan ID Talent
-    """
-    max = 5;
-    print(f"Retrieve Data: search for \"{search}\" on \"{collection_name}\"")
-    if(max_result > max):
-        raise RuntimeError("Can't retrieve more than ")
+    if input.max_result > 5:
+        raise RuntimeError("Can't retrieve more than 5 results.")
     
     try:
-        collection = Chroma().client().get_or_create_collection(name=collection_name)
+        collection = Chroma().client().get_or_create_collection(name=input.collection_name)
         results = collection.query(
-            query_texts=[search],  # Chroma will embed this for you
-            n_results=max_result  # how many results to return
+            query_texts=[input.search],  # Chroma will embed this for you
+            n_results=input.max_result  # how many results to return
         )
         return results
     except Exception as error:
@@ -93,61 +45,58 @@ def retrieve_data(collection_name: str, search: str, max_result: int = 5) -> dic
         print(error)
 
 
-@tool
-def create_talent(name: str, position: str, birthdate: str, summary: str, skills: Optional[List[str]] = None, educations: Optional[List[Dict[str, Any]]] = None) -> dict:
+class TalentUpsertInput(BaseModel):
     """
-    Create a new talent.
-
-    Args:
-        name (str): Nama talent.
-        position (str): Posisi pekerjaan talent.
-        birthdate (str): Tanggal lahir talent dalam format YYYY-MM-DD.
-        summary (str): Ringkasan profil talent.
-        skills (List[str], optional): Daftar skill.
-        educations (List[Dict[str, Any]], optional): Daftar riwayat pendidikan.
+    Schema input untuk membuat atau memperbarui record talent (UPSERT).
+    
+    Jika talent_id diisi, akan melakukan UPDATE. 
+    Jika talent_id tidak diisi, akan melakukan CREATE.
+    Semua field wajib diisi saat CREATE, dan opsional saat UPDATE.
     """
-    payload: Dict[str, Any] = {}
-    if name is not None:
-        payload["name"] = name
-    if position is not None:
-        payload["position"] = position
-    if birthdate is not None:
-        payload["birthdate"] = birthdate
-    if summary is not None:
-        payload["summary"] = summary
-    return relogin_once_on_401(_update_resource, "talent", talent_id, payload)
+    
+    # Kunci utama: Opsional untuk CREATE, wajib untuk UPDATE
+    talent_id: Optional[int] = Field(None, description="ID unik Talent. Jika diisi, lakukan UPDATE. Jika kosong, lakukan CREATE.")
+    
+    # Field Wajib/Opsional
+    name: Optional[str] = Field(None, description="Nama lengkap talent.")
+    position: Optional[str] = Field(None, description="Posisi pekerjaan talent saat ini.")
+    birthdate: Optional[str] = Field(None, description="Tanggal lahir talent. Format: YYYY-MM-DD.")
+    summary: Optional[str] = Field(None, description="Ringkasan singkat profil atau pengalaman talent.")
+    
+    # Complex fields
+    skills: Optional[List[str]] = Field(None, description="Daftar keahlian (skill).")
+    educations: Optional[List[Dict[str, Any]]] = Field(None, description="Daftar riwayat pendidikan.")
 
-
-# ... dan seterusnya, untuk semua fungsi create/update/delete lainnya.
-# Lu bisa ikutin format di atas untuk semua fungsi di `api_client.py`.
-# Pastikan type hints-nya bener dan docstring-nya jelas ya, Jun.
-
-
-@tool
-def update_talent(talent_id: int, name: Optional[str] = None, position: Optional[str] = None, birthdate: Optional[str] = None, summary: Optional[str] = None, skills: Optional[List[str]] = None, educations: Optional[List[Dict[str, Any]]] = None) -> dict:
+@tool(args_schema=TalentUpsertInput)
+def manage_talent(input: TalentUpsertInput) -> dict:
     """
-    Update an existing talent's fields.
-
-    Args:
-        talent_id (int): ID unik dari talent yang akan diperbarui.
-        name (str, optional): Nama lengkap talent.
-        position (str, optional): Posisi atau jabatan talent saat ini.
-        birthdate (str, optional): Tanggal lahir talent dalam format YYYY-MM-DD.
-        summary (str, optional): Ringkasan singkat profil atau pengalaman talent.
-        skills (List[str], optional): Daftar keahlian atau skill yang dimiliki.
-        educations (List[Dict[str, Any]], optional): Daftar riwayat pendidikan talent.
+    Membuat record talent baru (CREATE) atau memperbarui yang sudah ada (UPDATE).
+    Jika talent_id diisi, lakukan UPDATE. Jika talent_id kosong, lakukan CREATE.
     """
-    payload: Dict[str, Any] = {}
-    if name is not None:
-        payload["name"] = name
-    if position is not None:
-        payload["position"] = position
-    if birthdate is not None:
-        payload["birthdate"] = birthdate
-    if summary is not None:
-        payload["summary"] = summary
-    return relogin_once_on_401(_update_resource, "talent", talent_id, payload)
+    
+    payload = input.model_dump(exclude_none=True, exclude={'talent_id'})
+    
+    if input.talent_id:
+        talent_id = input.talent_id
+        
+        if not payload:
+            return {"message": f"Tidak ada data untuk diupdate di Talent ID {talent_id}."}
+            
+        print(f"Mengupdate Talent ID: {talent_id}")
+        
+        return relogin_once_on_401(_update_resource, "talent", talent_id, payload)
+        
+    else:
+        
+        required_fields = ["name", "position", "birthdate", "summary"]
+        for field in required_fields:
+            if field not in payload:
+                raise ValueError(f"Untuk CREATE talent baru, field '{field}' wajib diisi.")
 
+        print("Menciptakan Talent Baru")
+        
+        return relogin_once_on_401(_create_resource, "talent", payload)
+    
 
 @tool
 def delete_talent(talent_id: int) -> dict:
@@ -161,59 +110,46 @@ def delete_talent(talent_id: int) -> dict:
 
 # ========== CANDIDATE MANAGEMENT ==========
 
-
-def create_candidate(talent_id: int, job_opening_id: int, status: Optional[int] = None, **kwargs) -> dict:
+class CandidateUpsertInput(BaseModel):
     """
-    Create a new candidate record, linking a talent to a job opening.
-
-    Args:
-        talent_id (int): ID unik dari talent.
-        job_opening_id (int): ID unik dari lowongan pekerjaan.
-        status (int, optional): Status kandidat (misalnya 1=Dihubungi, 2=Interview).
-        regist_at (str, optional): Waktu pendaftaran dalam format YYYY-MM-DD HH:MM:SS.
-        interview_schedule (str, optional): Jadwal wawancara dalam format YYYY-MM-DD HH:MM:SS.
-        notified_at (str, optional): Waktu pemberitahuan dalam format YYYY-MM-DD HH:MM:SS.
+    Schema input untuk membuat atau memperbarui record kandidat. 
+    
+    API akan menentukan apakah ini CREATE atau UPDATE (UPSERT)
+    berdasarkan kombinasi unik talent_id dan job_opening_id.
     """
-    payload = {"talent_id": talent_id,
-               "job_opening_id": job_opening_id, "status": status, **kwargs}
+    
+    talent_id: int = Field(..., description="ID Talent (Wajib).")
+    job_opening_id: int = Field(..., description="ID Job Opening (Wajib).")
+    
+    status: Optional[int] = Field(
+        None, 
+        description=(
+            "Kode status kandidat. Opsional, default status 1 (Draft). "
+            "Contoh: 2=Scouting, 100=Screening, 202=Offering, 902=Eliminated."
+        )
+    )
+    
+    # Field opsional lainnya (untuk update/create)
+    regist_at: Optional[str] = Field(None, description="Waktu pendaftaran. Format: YYYY-MM-DD HH:MM:SS.")
+    interview_schedule: Optional[str] = Field(None, description="Jadwal wawancara. Format: YYYY-MM-DD HH:MM:SS.")
+    notified_at: Optional[str] = Field(None, description="Waktu pemberitahuan. Format: YYYY-MM-DD HH:MM:SS.")
+
+@tool(args_schema=CandidateUpsertInput)
+def manage_candidate(input: CandidateUpsertInput) -> dict:
+    """
+    Membuat (CREATE) record kandidat baru atau memperbarui (UPDATE) yang sudah ada (UPSERT).
+    Sistem API yang menentukan operasi berdasarkan kombinasi talent_id dan job_opening_id.
+    """
+    
+    # 1. Ambil payload bersih (hanya yang non-None)
+    # Karena API lo yang handle UPSERT, kita kirim semua data yang ada
+    payload = input.model_dump(exclude_none=True)
+    
+    print(f"Mengirim payload UPSERT Candidate: {payload}")
+    
+    # 2. Selalu panggil fungsi CREATE (_create_resource), 
+    # karena kita asumsikan API POST /candidates/ yang handle UPSERT
     return relogin_once_on_401(_create_resource, "candidates", payload)
-
-
-@tool
-def update_candidate(candidate_id: int, talent_id: int, job_opening_id:int, status) -> dict:
-    """
-    Update an existing candidate record.
-
-    Update status kandidat:
-        1 => 'Draft',
-        2 => 'Scouting',
-        100 => 'Screening',
-        101 => 'Finished Assesment',
-        102 => 'Interview',
-        201 => 'Shortlisted',
-        202 => 'Offering',
-        203 => 'Contract Accepted',
-        901 => 'Disinterest',
-        902 => 'Eliminated',
-        903 => 'Rejection'
-
-    Args:
-        candidate_id (int): ID unik dari kandidat yang akan diperbarui.
-        talent_id (int, optional): ID  talent.
-        job_opening_id (int, optional): ID Job Opening.
-        status (int, optional): Status 
-        regist_at (str, optional): Waktu pendaftaran dalam format YYYY-MM-DD HH:MM:SS.
-        interview_schedule (str, optional): Jadwal wawancara dalam format YYYY-MM-DD HH:MM:SS.
-        notified_at (str, optional): Waktu pemberitahuan dalam format YYYY-MM-DD HH:MM:SS.
-    """
-    print("Update Candidate Status")    
-    payload = {
-        "talent_id": talent_id,
-        "job_opening_id": job_opening_id,
-        "status": status
-    }
-    return relogin_once_on_401(_update_resource, "candidates", candidate_id, payload)
-
 
 @tool
 def delete_candidate(candidate_id: int) -> dict:
@@ -227,41 +163,58 @@ def delete_candidate(candidate_id: int) -> dict:
 
 # ========== COMPANY MANAGEMENT ==========
 
-
-@tool
-def create_company(name: str, description: Optional[str] = None, **kwargs) -> dict:
+class CompanyUpsertInput(BaseModel):
     """
-    Create a new company record.
-
-    Args:
-        name (str): Nama perusahaan.
-        description (str, optional): Deskripsi singkat tentang perusahaan.
-        status (int, optional): Status perusahaan.
+    Schema input untuk membuat atau memperbarui record Perusahaan (UPSERT).
+    
+    Jika company_id diisi, akan melakukan UPDATE. 
+    Jika company_id tidak diisi, akan melakukan CREATE.
     """
-    payload = {"name": name, **kwargs}
-    return relogin_once_on_401(_create_resource, "companies", payload)
+    
+    # Kunci utama: Opsional untuk CREATE, wajib untuk UPDATE
+    company_id: Optional[int] = Field(None, description="ID unik Perusahaan. Jika diisi, lakukan UPDATE. Jika kosong, lakukan CREATE.")
+    
+    # Field Wajib/Opsional
+    name: Optional[str] = Field(None, description="Nama perusahaan.")
+    description: Optional[str] = Field(None, description="Deskripsi singkat tentang perusahaan.")
+    status: Optional[int] = Field(None, description="Status perusahaan (misal: 1=Aktif, 0=Nonaktif).")
 
-
-@tool
-def update_company(company_id: int, name: Optional[str] = None, description: Optional[str] = None, status: Optional[int] = None) -> dict:
+    
+@tool(args_schema=CompanyUpsertInput)
+def manage_company(input: CompanyUpsertInput) -> dict:
     """
-    Update an existing company record.
-
-    Args:
-        company_id (int): ID unik dari perusahaan yang akan diperbarui.
-        name (str, optional): Nama perusahaan.
-        description (str, optional): Deskripsi singkat tentang perusahaan.
-        status (int, optional): Status perusahaan.
+    Membuat record perusahaan baru (CREATE) atau memperbarui yang sudah ada (UPDATE).
+    Jika company_id diisi, lakukan UPDATE. Jika company_id kosong, lakukan CREATE.
     """
-    payload = {
-        "company_id": company_id,
-        "name": name,
-        "description": description,
-        "status": status
-    }
-    return relogin_once_on_401(_update_resource, "companies", company_id, payload)
+    
+    # 1. Ambil payload bersih (semua yang non-None, kecuali company_id)
+    payload = input.model_dump(exclude_none=True, exclude={'company_id'})
+    
+    # 2. Tentukan Mode Operasi
+    if input.company_id:
+        # ** MODE: UPDATE (company_id ADA) **
+        company_id = input.company_id
+        
+        if not payload:
+            return {"message": f"Tidak ada data untuk diupdate di Company ID {company_id}."}
+            
+        print(f"Mengupdate Company ID: {company_id}")
+        
+        # Panggil helper UPDATE
+        return relogin_once_on_401(_update_resource, "companies", company_id, payload)
+        
+    else:
+        # ** MODE: CREATE (company_id KOSONG) **
+        
+        # Logika Validasi Wajib untuk CREATE
+        if not payload.get("name"):
+            raise ValueError("Untuk CREATE perusahaan baru, 'name' wajib diisi.")
 
-
+        print("Menciptakan Company Baru")
+        
+        # Panggil helper CREATE
+        return relogin_once_on_401(_create_resource, "companies", payload)
+    
 @tool
 def delete_company(company_id: int) -> dict:
     """
@@ -272,64 +225,68 @@ def delete_company(company_id: int) -> dict:
     """
     return relogin_once_on_401(_delete_resource, "companies", company_id)
 
-# ========== COMPANY PROPERTY MANAGEMENT ==========
-
-
-@tool
-def create_company_property(company_id: int, key: str, value: str) -> dict:
-    """
-    Create a new property for a company.
-
-    Args:
-        company_id (int): ID unik dari perusahaan.
-        key (str): Kunci properti (misalnya 'lokasi', 'industri').
-        value (str): Nilai dari properti tersebut.
-    """
-    payload = {"company_id": company_id, "key": key, "value": value}
-    return relogin_once_on_401(_create_resource, "company-properties", payload)
-
-
 # ========== JOB OPENING MANAGEMENT ==========
 
-@tool
-def create_job_opening(company_id: int, title: str, body: Optional[str] = None, due_date: Optional[str] = None, status: Optional[int] = None, **kwargs) -> dict:
+class JobOpeningUpsertInput(BaseModel):
     """
-    Create a new job opening.
-
-    Args:
-        company_id (int): ID unik dari perusahaan yang membuka lowongan.
-        title (str): Judul lowongan pekerjaan.
-        body (str, optional): Deskripsi lengkap lowongan.
-        due_date (str, optional): Tanggal tenggat lamaran dalam format YYYY-MM-DD.
-        status (int, optional): Status lowongan (misalnya 1=Aktif, 0=Nonaktif).
+    Schema input untuk membuat atau memperbarui record Job Opening (UPSERT).
+    
+    Jika job_opening_id diisi, akan melakukan UPDATE. 
+    Jika job_opening_id tidak diisi, akan melakukan CREATE.
     """
+    
+    # Kunci utama: Opsional untuk CREATE, wajib untuk UPDATE
+    job_opening_id: Optional[int] = Field(None, description="ID unik Job Opening. Jika diisi, lakukan UPDATE. Jika kosong, lakukan CREATE.")
+    
+    # Field Wajib/Opsional
+    company_id: Optional[int] = Field(None, description="ID unik perusahaan yang membuka lowongan.")
+    title: Optional[str] = Field(None, description="Judul lowongan pekerjaan.")
+    body: Optional[str] = Field(None, description="Deskripsi lengkap lowongan.")
+    due_date: Optional[str] = Field(None, description="Tanggal tenggat lamaran. Format: YYYY-MM-DD.")
+    status: Optional[int] = Field(None, description="Status lowongan (misalnya 1=Aktif, 0=Nonaktif).")
 
-    payload = {"company_id": company_id, "title": title}
-    payload["body"] = body if body is not None else ""
-    payload["status"] = status  # <-- Menambahkan status default (1 = aktif)
-    payload.update(kwargs)
-    return relogin_once_on_401(_create_resource, "job-openings", payload)
 
-
-@tool
-def update_job_opening(job_opening_id: int, company_id: Optional[int] = None, title: Optional[str] = None, body: Optional[str] = None, due_date: Optional[str] = None, status: Optional[int] = None, **kwargs) -> dict:
+@tool(args_schema=JobOpeningUpsertInput)
+def manage_job_opening(input: JobOpeningUpsertInput) -> dict:
     """
-    Update an existing job opening.
-    Required job_opening_id, other field are optional
-
-    Args:
-        job_opening_id (int): ID unik dari lowongan yang akan diperbarui.
-        company_id (int, optional): ID unik dari perusahaan yang membuka lowongan.
-        title (str, optional): Judul lowongan pekerjaan.
-        body (str, optional): Deskripsi lengkap lowongan.
-        due_date (str, optional): Tanggal tenggat lamaran dalam format YYYY-MM-DD.
-        status (int, optional): Status lowongan (misalnya 1=Aktif, 0=Nonaktif).
+    Membuat record lowongan baru (CREATE) atau memperbarui yang sudah ada (UPDATE).
+    Jika job_opening_id diisi, lakukan UPDATE. Jika job_opening_id kosong, lakukan CREATE.
     """
-    payload = {k: v for k, v in kwargs.items() if v is not None}
-    print("UPDATE JOB OPENING", job_opening_id, kwargs)
-    if not payload:
-        return {"message": "Tidak ada data untuk diupdate."}
-    return relogin_once_on_401(_update_resource, "job-openings", job_opening_id, payload)
+    
+    # 1. Ambil payload bersih (semua yang non-None, kecuali job_opening_id)
+    payload = input.model_dump(exclude_none=True, exclude={'job_opening_id'})
+    
+    # 2. Tentukan Mode Operasi
+    if input.job_opening_id:
+        # ** MODE: UPDATE (job_opening_id ADA) **
+        opening_id = input.job_opening_id
+        
+        if not payload:
+            return {"message": f"Tidak ada data untuk diupdate di Job Opening ID {opening_id}."}
+            
+        print(f"Mengupdate Job Opening ID: {opening_id}")
+        
+        # Panggil helper UPDATE
+        return relogin_once_on_401(_update_resource, "job-openings", opening_id, payload)
+        
+    else:
+        # ** MODE: CREATE (job_opening_id KOSONG) **
+        
+        # Logika Validasi Wajib untuk CREATE
+        required_fields = ["company_id", "title"]
+        for field in required_fields:
+            if field not in payload:
+                raise ValueError(f"Untuk CREATE job opening baru, field '{field}' wajib diisi.")
+
+        # Set body default jika kosong (sesuai logic asli lo)
+        payload.setdefault("body", "") 
+        # Set status default jika kosong (sesuai logic asli lo)
+        payload.setdefault("status", 1) 
+
+        print("Menciptakan Job Opening Baru")
+        
+        # Panggil helper CREATE
+        return relogin_once_on_401(_create_resource, "job-openings", payload)
 
 
 @tool
@@ -342,41 +299,6 @@ def delete_job_opening(opening_id: int) -> dict:
     """
     return relogin_once_on_401(_delete_resource, "job-openings", opening_id)
 
-
-recall_vector_store = InMemoryVectorStore(OpenAIEmbeddings())
-
-
-def get_user_id(config: RunnableConfig) -> str:
-    user_id = config["configurable"].get("user_id")
-    if user_id is None:
-        raise ValueError("User ID needs to be provided to save a memory.")
-
-    return user_id
-
-
-@tool
-def save_recall_memory(memory: str, config: RunnableConfig) -> str:
-    """Save memory to vectorstore for later semantic retrieval."""
-    user_id = get_user_id(config)
-    document = Document(
-        page_content=memory, id=str(uuid.uuid4()), metadata={"user_id": user_id}
-    )
-    recall_vector_store.add_documents([document])
-    return memory
-
-
-@tool
-def search_recall_memories(query: str, config: RunnableConfig) -> List[str]:
-    """Search for relevant memories."""
-    user_id = get_user_id(config)
-
-    def _filter_function(doc: Document) -> bool:
-        return doc.metadata.get("user_id") == user_id
-
-    documents = recall_vector_store.similarity_search(
-        query, k=3, filter=_filter_function
-    )
-    return [document.page_content for document in documents]
 
 
 @tool
@@ -448,79 +370,58 @@ def initiate_new_chat(recipient, trigger_prompt):
     SubAgent().initiate_chat(recipient, trigger_prompt)
     pass
 
-
-@tool
-def generate_screening_question(job_description):
-    """Generate Screening Question for Candidate
-
-    Required for crafting context prompt for TALENT_REACH_OUT
-    Args:
-        job_description: str - job description detail
+class ScreeningTalentInput(BaseModel):
     """
-
-    response = ScreeningQuestionAgent().createQuestion(job_description)
-    return response
-
-
-
-@tool
-def screening_a_talent(
-    talent_id,
-    chat_user_id, 
-    job_opening_id,
-    job_opening_detail,
-    talent_information,
-    chat_starter = "Hello"
-    ):
-    """Screening a Talent
-
-    Penawaran job_opening ke Talent, Memulai Screening ke Talent
-    Args: 
-        talent_id (int): ID Talent
-        talent_information (str): Desription about the talent
-        chat_user_id (str): chat_user_id of the Talent
-        job_opening_id (int): Job Opening ID
-        job_opening_detail (str): Job Opening detail (include company info, position, description)
-        chat_starter (str): Draft pesan pembuka/penawaran/job offer (gunakan markdown)
+    Schema input untuk memulai proses Screening/Penawaran Kerja kepada Talent.
+    Tool ini WAJIB dijalankan setelah record kandidat dibuat/di-update (UPSERT).
     """
+    
+    candidate_id: int = Field(..., description="ID unik Kandidat yang akan diproses Screening. ID ini didapat dari hasil tool 'manage_candidate'.")
+    chat_user_id: str = Field(..., description="ID chat milik Talent (misalnya 'id@user_name').")
+    job_opening_detail: str = Field(..., description="Detail Job Opening (termasuk info perusahaan, posisi, dan deskripsi) yang relevan.")
+    talent_information: str = Field(..., description="Deskripsi atau ringkasan profil tentang Talent tersebut.")
+    candidate_information: str = Field(..., description="Informasi tambahan tentang kandidat (jika ada).")
+    chat_starter: Optional[str] = Field("Hello", description="Draft pesan pembuka/penawaran yang akan dikirim (gunakan Markdown).")
+    # Talent ID tidak diperlukan di sini karena sudah terasosiasi di Candidate ID
 
+@tool(args_schema=ScreeningTalentInput)
+def screening_a_talent(input: ScreeningTalentInput) -> dict:
+    """
+    Memulai proses Penawaran Job Opening dan Inisiasi Chat Screening kepada Talent.
+    Tool ini hanya dapat dipanggil setelah record kandidat (candidate_id) berhasil dibuat/di-update.
+    """
 
     print(("Screening Talent"
-           f"""chat_user_id: {chat_user_id}
-           talent_id: {talent_id}
-        job_opening_detail: {job_opening_detail}
-        talent_information: {talent_information}"""))
+           f"""chat_user_id: {input.chat_user_id}
+           candidate_id: {input.candidate_id} 
+           job_opening_detail: {input.job_opening_detail}
+           talent_information: {input.talent_information}"""))
     
     steps = {
-        "create_candidate": 0,
-        "generate_screening_question": 0,
         "intiate_chat": 0,
+        "candidate_id": input.candidate_id # Masukkan ID kandidat ke hasil
     }
-    try:
-        create_candidate(
-            talent_id=talent_id, 
-            job_opening_id=job_opening_id, 
-            status=1)
-        steps["create_candidate"] = 1
-    except Exception as e:
-        raise RuntimeError("Gagal create candidate", e)
-
-    try:
-        screening_question = ScreeningQuestionAgent().createQuestion(job_opening_detail)
-        steps["generate_screening_question"] = 1
-    except Exception as e:
-        raise RuntimeError("Gagal create candidate", e)
-
-        
+    
+    # 💡 Perhatian: Logic create_candidate dihapus!
+    
     try:
         print(":: REACH OUT TALENT")
-        ScreeningQuestionAgent().reachOutTalent(chat_user_id, job_opening_detail, screening_question.text(), talent_information, AIMessage(chat_starter))
-        steps["intiate_chat"] = 1
-    except Exception as e:
-        raise RuntimeError("Gagal create candidate", e)
-
         
-    return steps
+        # Panggil Agen Screening
+        ScreeningQuestionAgent(is_new=True).reachOutTalent(
+            input.chat_user_id, 
+            input.job_opening_detail, 
+            input.talent_information, 
+            input.candidate_information, 
+            AIMessage(input.chat_starter)
+        )
+        steps["intiate_chat"] = 1
+        
+    except Exception as e:
+        raise RuntimeError(f"Gagal memulai chat screening: {str(e)}")
+        
+    return {"success": True, "steps": steps, "message": f"Screening untuk Candidate ID {input.candidate_id} berhasil diinisiasi."}
+
 
 @tool
 def evaluate_job_opening_progress(job_opening_id):
@@ -594,23 +495,16 @@ def push_notification(chat_user_id, subject, body):
 
 
 tools = [
-    # save_recall_memory,
-    # search_recall_memories,
     retrieve_data,
-    create_talent,
-    update_talent,
+    manage_talent,
     delete_talent,
-    update_candidate,
+    manage_candidate,
     delete_candidate,
-    create_company,
-    update_company,
+    manage_company,
     delete_company,
-    create_company_property,
-    create_job_opening,
-    update_job_opening,
+    manage_job_opening,
     delete_job_opening,
     fetch_user_data,
-    # initiate_new_chat,
     screening_a_talent,
     evaluate_job_opening_progress,
     get_assessment_link,

@@ -32,7 +32,7 @@ class BaseLisa:
     def __init__(self, is_new=False):
         print("LISA INITIATE")
         self.is_new = is_new
-        self.tools = Helper.get_helpers("tools")
+        self.tools = Helper().get("tools")
 
     def initiate_chat(self, chat_user_id, prompt, ai_message=None, use_context_definer=True):
         session_id = str(uuid.uuid4())
