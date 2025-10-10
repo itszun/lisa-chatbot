@@ -16,6 +16,7 @@ from langgraph.runtime import get_runtime
 from dataclasses import dataclass
 from datetime import datetime
 from tools_registry import Helper
+from prompt import TemplatePrompt
 
 @dataclass
 class UserContext:
@@ -34,15 +35,15 @@ class BaseLisa:
         self.is_new = is_new
         self.tools = Helper().get("tools")
 
-    def initiate_chat(self, chat_user_id, prompt, ai_message=None, use_context_definer=True):
+    def initiate_chat(self, chat_user_id, prompt, ai_message=None, context="HR_ASSISTANT"):
         session_id = str(uuid.uuid4())
         print("LISA INITIATE CHAT: ", session_id)
 
         chat_session = self.get_session(chat_user_id, session_id)
 
-        if (use_context_definer):
+        if (context):
             system_message = self.context_definer(
-                chat_user_id, [HumanMessage(content=prompt)])
+                chat_user_id, context)
             ai_message = self.ai_starter_template(system_message)
         else:
             system_message = SystemMessage(prompt)
@@ -59,13 +60,13 @@ class BaseLisa:
             "session_id": session_id,
         }
 
-    def chat(self, chat_user_id, user_message, session_id):
+    def chat(self, chat_user_id, user_message, session_id, context="HR_ASSISTANT"):
         chat_session = self.get_session(chat_user_id, session_id)
 
         if (self.is_new):
             messages = [HumanMessage(
                 content=user_message, timestamp=str(datetime.now()))]
-            system_message = self.context_definer(chat_user_id, messages)
+            system_message = self.context_definer(chat_user_id, context)
             messages = [system_message, *messages]
             chat_session.add_messages(messages)
         else:
@@ -75,13 +76,14 @@ class BaseLisa:
 
         self.agent = create_agent(
             self.select_model,
-            tools=self.tools,
+            tools=Helper().get('tools'),
             context_schema=UserContext,
         )
-        print(":: AGENT INVOKE ")
+        print(":: AGENT INVOKE START")
         response = self.agent.invoke({
             "messages": messages
         }, context=UserContext(chat_user_id, "user"))
+        print(":: AGENT INVOKE END")
         print(":: Response")
         print(response)
         ai_response = response['messages'][-1]
@@ -133,35 +135,11 @@ respon dengan plain text"""
 
         return response
 
-    def context_definer(self, chat_user_id, messages) -> SystemMessage:
-        user_info = Helper().get('fetch_user_data').invoke(
-            {'chat_user_id': chat_user_id})
-
-        messages = [
-            *messages,
-            HumanMessage(
-                """Berdasarkan Informasi User dan Pesan diatas, tentukan context prompt yang sesuai. Lalu gunakan tools retrieve_prompt """
-                f"""About User: {user_info}"""
-            )
-        ]
-
-        response = ChatOpenAI().bind_tools([Helper.get('retrieve_prompt')]).invoke(messages)
-
-        for tc in response.tool_calls:
-            print("Tool Calls:", tc)
-            fname = tc['name']
-            fargs = tc['args']
-            tool_result = globals()[fname].invoke(fargs)
-            tool_message = ToolMessage(
-                content=tool_result,
-                tool_call_id=tc['id']
-            )
-            print("tool_message")
-            print(tool_message)
-            tool_message.text()
+    def context_definer(self, chat_user_id, context = "HR_ASSISTANT") -> SystemMessage:
+        message = getattr(TemplatePrompt, context)
 
         return SystemMessage(
-            content=tool_message.text()
+            content=message
         )
 
     def select_model(self, state: AgentState, runtime: Runtime) -> ChatOpenAI:
@@ -170,9 +148,9 @@ respon dengan plain text"""
         message_count = len(messages)
 
         if message_count < 10:
-            return ChatOpenAI(model="gpt-4.1-mini").bind_tools(Helper.get('tools'))
+            return ChatOpenAI(model="gpt-4.1-mini").bind_tools(Helper().get('tools'))
         else:
-            return ChatOpenAI(model="gpt-5").bind_tools(Helper.get('tools'))
+            return ChatOpenAI(model="gpt-5").bind_tools(Helper().get('tools'))
 
     def get_session(self, chat_user_id, session_id):
         session = MongoDBChatMessageHistory(

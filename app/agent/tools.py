@@ -1,5 +1,4 @@
-from api_client import (
-    retrieve_data, relogin_once_on_401,
+from api_client import ( relogin_once_on_401,
     _update_resource, _delete_resource, _create_resource
 )
 from langchain_core.tools import tool
@@ -25,11 +24,12 @@ class RetrieveDataInput(BaseModel):
     max_result: int = Field(5, description="Jumlah hasil yang ingin dikembalikan (maksimum 5).")
 
 @tool(args_schema=RetrieveDataInput)
-def retrieve_data(input: RetrieveDataInput) -> dict:
+def retrieve_data(**kwargs) -> dict:
     """
     Mencari data terkait Job Opening, Talent, Company, User, dan Candidate menggunakan Vector DB (Chroma).
     Gunakan untuk mendapatkan detail objek berdasarkan deskripsi atau ID yang tidak diketahui.
     """
+    input = RetrieveDataInput(**kwargs)
     if input.max_result > 5:
         raise RuntimeError("Can't retrieve more than 5 results.")
     
@@ -135,11 +135,12 @@ class CandidateUpsertInput(BaseModel):
     notified_at: Optional[str] = Field(None, description="Waktu pemberitahuan. Format: YYYY-MM-DD HH:MM:SS.")
 
 @tool(args_schema=CandidateUpsertInput)
-def manage_candidate(input: CandidateUpsertInput) -> dict:
+def manage_candidate(**kwargs) -> dict:
     """
     Membuat (CREATE) record kandidat baru atau memperbarui (UPDATE) yang sudah ada (UPSERT).
     Sistem API yang menentukan operasi berdasarkan kombinasi talent_id dan job_opening_id.
     """
+    input = CandidateUpsertInput(**kwargs);
     
     # 1. Ambil payload bersih (hanya yang non-None)
     # Karena API lo yang handle UPSERT, kita kirim semua data yang ada
@@ -181,11 +182,12 @@ class CompanyUpsertInput(BaseModel):
 
     
 @tool(args_schema=CompanyUpsertInput)
-def manage_company(input: CompanyUpsertInput) -> dict:
+def manage_company(**kwargs) -> dict:
     """
     Membuat record perusahaan baru (CREATE) atau memperbarui yang sudah ada (UPDATE).
     Jika company_id diisi, lakukan UPDATE. Jika company_id kosong, lakukan CREATE.
     """
+    input = CompanyUpsertInput(**kwargs)
     
     # 1. Ambil payload bersih (semua yang non-None, kecuali company_id)
     payload = input.model_dump(exclude_none=True, exclude={'company_id'})
@@ -247,11 +249,12 @@ class JobOpeningUpsertInput(BaseModel):
 
 
 @tool(args_schema=JobOpeningUpsertInput)
-def manage_job_opening(input: JobOpeningUpsertInput) -> dict:
+def manage_job_opening(**kwargs) -> dict:
     """
     Membuat record lowongan baru (CREATE) atau memperbarui yang sudah ada (UPDATE).
     Jika job_opening_id diisi, lakukan UPDATE. Jika job_opening_id kosong, lakukan CREATE.
     """
+    input = JobOpeningUpsertInput(**kwargs)
     
     # 1. Ambil payload bersih (semua yang non-None, kecuali job_opening_id)
     payload = input.model_dump(exclude_none=True, exclude={'job_opening_id'})
@@ -348,7 +351,7 @@ def retrieve_prompt(context):
 
     !! You can't choose outside the options
     """
-    print(context)
+    print("CONTEXT found", context)
     return getattr(TemplatePrompt, context)
 
 
@@ -385,11 +388,12 @@ class ScreeningTalentInput(BaseModel):
     # Talent ID tidak diperlukan di sini karena sudah terasosiasi di Candidate ID
 
 @tool(args_schema=ScreeningTalentInput)
-def screening_a_talent(input: ScreeningTalentInput) -> dict:
+def screening_a_talent(**kwargs) -> dict:
     """
     Memulai proses Penawaran Job Opening dan Inisiasi Chat Screening kepada Talent.
     Tool ini hanya dapat dipanggil setelah record kandidat (candidate_id) berhasil dibuat/di-update.
     """
+    input = ScreeningTalentInput(**kwargs);
 
     print(("Screening Talent"
            f"""chat_user_id: {input.chat_user_id}
@@ -464,7 +468,7 @@ def initiate_a_new_chat(chat_user_id, system_prompt, chat_starter):
         chat_user_id, 
         prompt=system_prompt, 
         ai_message=chat_starter,
-        use_context_definer=False)
+        context=False)
     
 @tool
 def push_notification(chat_user_id, subject, body):
@@ -492,6 +496,7 @@ def push_notification(chat_user_id, subject, body):
     result= data["data"] if isinstance(data, dict) and "data" in data else data
     print("DATA", data)
     print("RESULT", result)
+    return data
 
 
 tools = [

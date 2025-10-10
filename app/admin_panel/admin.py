@@ -64,7 +64,7 @@ def init_admin(app):
 
     print(mongo.db)
     
-    admin = Admin(app, name='WIKA System Admin', template_mode='bootstrap4')
+    admin = Admin(app, name='Chatbot Admin', template_mode='bootstrap4')
 
     
     admin.add_view(CustomChatHistoryView(

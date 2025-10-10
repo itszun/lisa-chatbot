@@ -423,20 +423,3 @@ def get_offer_details(candidate_id: int):
     """
     return relogin_once_on_401(_get_detail, "offers", candidate_id)
 
-
-# ===================== VECTOR RETRIEVAL ==================
-def retrieve_data(collection_name, search: str = ""):
-    from vectordb import Chroma
-    print(f"Retrieve Data: search for \"{search}\" on \"{collection_name}\"")
-    try:
-        collection = Chroma().client().get_or_create_collection(name=collection_name)
-        results = collection.query(
-            query_texts=[search], # Chroma will embed this for you
-            n_results=5 # how many results to return
-        )
-        return results
-    except Exception as error:
-        print("Error Tools")
-        print(error)
-    else:
-        return "None"

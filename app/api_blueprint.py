@@ -1,4 +1,5 @@
 from flask import Blueprint, jsonify, request
+import traceback
 # app.py (Versi Final Tanpa Validasi Awal)
 # -*- coding: utf-8 -*-
 from tools_registry import Helper
@@ -36,10 +37,20 @@ def chat2():
     try:
         response = Lisa(is_new=is_new).chat(chat_user_id, user_msg, session_id)
     except Exception as e:
+        print(e)
+        tb = e.__traceback__
+        # Extract the last frame, which corresponds to the error location
+        last_frame = traceback.extract_tb(tb)[-1]
+        line_number = last_frame.lineno
+        file_name = last_frame.filename
+        print(f"File: {file_name}")
+        print(f"Error occurred on line: {line_number}")
+        print(f"Exception: {e}")
         return jsonify({
             "user": chat_user_id,
             "session_id": session_id,
             "answer": "Terjadi Kesalahan",
+            "error_detail": repr(e),
         })
 
 

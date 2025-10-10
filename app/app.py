@@ -22,10 +22,6 @@ from logs import setup_logging
 # ======================================================================
 MAX_HISTORY_MESSAGES = 100
 
-Helper().register(tools=tools,
-                  retrieve_prompt=retrieve_prompt,
-                  fetch_user_data=fetch_user_data)
-
 load_dotenv()
 setup_logging()
 
@@ -42,6 +38,11 @@ def create_app(config_name=None):
     app.register_blueprint(api_bp)
 
     app.logger.info("Application setup complete.")
+    
+    Helper().register(tools=tools,
+                    initiator_tool=[retrieve_prompt],
+                    fetch_user_data=fetch_user_data)
+
     
     return app
 
