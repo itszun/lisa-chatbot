@@ -44,6 +44,7 @@ def chat2():
 
     chat_user_id = (data.get("user") or "").strip()
     stream = (str(data.get("stream")) or "").strip()
+    stream = stream is not None and stream == "1" or stream == "true"
     user_msg = (data.get("message") or "").strip()
     session_id = (data.get("session_id") or "").strip()
     if session_id == "":
@@ -51,12 +52,7 @@ def chat2():
         is_new = True
 
     try:
-        response = Lisa(is_new=is_new,stream=bool(stream)).chat(chat_user_id, user_msg, session_id)
-        if bool(stream):
-            return Response(
-                event_stream(response),
-                mimetype='text/event-stream'
-            )
+        response = Lisa(is_new=is_new).chat(chat_user_id, user_msg, session_id)
     except Exception as e:
         print(e)
         raise e
