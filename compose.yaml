@@ -14,13 +14,6 @@ services:
     command: gunicorn --workers 4 --bind 0.0.0.0:5000 wsgi:app
     volumes:
       - ./app:/usr/src/app
-    environment:
-      - DB_HOST=mongo
-      - DB_PORT=27017
-      - DB_USER=root
-      - DB_PASS=s3cure
-      - MONGO_URI=mongodb://root:s3cure@mongo:27017/
-      - MONGO_DATABASE=langchain_db_3
 
   mongo:
       image: mongo
