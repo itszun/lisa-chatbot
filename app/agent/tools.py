@@ -13,6 +13,11 @@ from agent.sub_agent import SubAgent
 from prompt import TemplatePrompt
 
 from langchain_core.messages.ai import AIMessage
+from langchain_openai import ChatOpenAI
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class RetrieveDataInput(BaseModel):
     """Schema input untuk pencarian data menggunakan Vector Database."""
@@ -516,3 +521,5 @@ tools = [
     initiate_a_new_chat,
     push_notification
 ]
+
+llm = ChatOpenAI(model="gpt-4.1-mini").bind_tools(tools)

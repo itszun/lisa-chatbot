@@ -15,7 +15,7 @@ from api_client import ensure_token
 from prompt import TemplatePrompt
 from agent.lisa import Lisa
 import json
-from agent.tools import tools, retrieve_prompt, fetch_user_data
+from agent.tools import tools, retrieve_prompt, fetch_user_data, llm
 from logs import setup_logging
 # ======================================================================
 # KONFIGURASI UMUM
@@ -25,26 +25,28 @@ MAX_HISTORY_MESSAGES = 100
 load_dotenv()
 setup_logging()
 
+
 def create_app(config_name=None):
     app = Flask(__name__, static_folder="static", template_folder="templates")
     CORS(app, resources={r"/*": {"origins": "*"}})
-    
+
     app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "fallback-key")
 
     from admin_panel.admin import init_admin
-    init_admin(app) 
+    init_admin(app)
 
-    from api_blueprint import api_bp 
+    from api_blueprint import api_bp
     app.register_blueprint(api_bp)
 
     app.logger.info("Application setup complete.")
-    
-    Helper().register(tools=tools,
-                    initiator_tool=[retrieve_prompt],
-                    fetch_user_data=fetch_user_data)
 
-    
+    Helper().register(tools=tools,
+                      llm=llm,
+                      initiator_tool=[retrieve_prompt],
+                      fetch_user_data=fetch_user_data)
+
     return app
+
 
 app = create_app()
 

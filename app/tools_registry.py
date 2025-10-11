@@ -11,7 +11,11 @@ class Helper():
       self._helpers = {**kwargs}
 
   def register(self, **kwargs):
+      print("REGISTER HELPER")
+      print(kwargs)
       self._helpers = {**self._helpers, **kwargs}
 
   def get(self, key):
+      print("GET HELPER " + key)
+      print(self._helpers[key])
       return self._helpers[key]

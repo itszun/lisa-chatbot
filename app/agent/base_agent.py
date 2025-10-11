@@ -18,22 +18,27 @@ from datetime import datetime
 from tools_registry import Helper
 from prompt import TemplatePrompt
 
-@dataclass
-class UserContext:
-    chat_user_id: str
-    created_by: str
-    # prompt_mode: str
+from langgraph.prebuilt import ToolNode
+from langgraph.graph import MessagesState, StateGraph, END
 
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class BaseLisa:
     agent = {}
     is_new = False
     tools = []
+    llm = None
 
     def __init__(self, is_new=False):
         print("LISA INITIATE")
         self.is_new = is_new
         self.tools = Helper().get("tools")
+        print("GET LLM")
+        print(Helper().get("llm"))
+        self.llm = Helper().get("llm")
 
     def initiate_chat(self, chat_user_id, prompt, ai_message=None, context="HR_ASSISTANT"):
         session_id = str(uuid.uuid4())
@@ -62,35 +67,62 @@ class BaseLisa:
 
     def chat(self, chat_user_id, user_message, session_id, context="HR_ASSISTANT"):
         chat_session = self.get_session(chat_user_id, session_id)
-
+        user_message = HumanMessage(content=user_message)
         if (self.is_new):
-            messages = [HumanMessage(
-                content=user_message, timestamp=str(datetime.now()))]
             system_message = self.context_definer(chat_user_id, context)
-            messages = [system_message, *messages]
+            messages = [system_message]
             chat_session.add_messages(messages)
         else:
-            chat_session.add_user_message(HumanMessage(
-                content=user_message, timestamp=str(datetime.now())))
             messages = chat_session.messages
 
-        self.agent = create_agent(
-            self.select_model,
-            tools=Helper().get('tools'),
-            context_schema=UserContext,
-        )
-        print(":: AGENT INVOKE START")
-        response = self.agent.invoke({
-            "messages": messages
-        }, context=UserContext(chat_user_id, "user"))
-        print(":: AGENT INVOKE END")
-        print(":: Response")
-        print(response)
+        chat_session.add_user_message(user_message)
+        response = self.main_flow(messages).invoke({"messages": [user_message]})
         ai_response = response['messages'][-1]
         chat_session.add_ai_message(ai_response)
 
         self.session_titles(chat_user_id, session_id, chat_session.messages)
         return ai_response
+
+    def run_agent_reasoning(self, messages):
+        llm = self.llm
+        def reason(state: MessagesState) -> MessagesState:
+            response = llm.invoke([*messages, *state['messages']])
+            return {"messages": [response]}
+
+        return reason
+
+    def tool_node(self):
+        return ToolNode(Helper().get('tools'))
+    
+    def main_flow(self, messages):
+
+        AGENT_REASON="agent_reason"
+        ACT="act"
+        LAST=-1
+
+        def should_continue(state: MessagesState) -> str:
+            if not state["messages"][LAST].tool_calls:
+                return END
+            return ACT
+
+        flow = StateGraph(MessagesState)
+
+        flow.add_node(AGENT_REASON, self.run_agent_reasoning(messages))
+        flow.set_entry_point(AGENT_REASON)
+        flow.add_node(ACT, self.tool_node())
+
+        flow.add_conditional_edges(AGENT_REASON, should_continue, {
+            END:END,
+            ACT:ACT,
+        })
+
+        flow.add_edge(ACT, AGENT_REASON)
+
+        app = flow.compile()
+
+        app.get_graph().draw_mermaid_png(output_file_path="flow.png")
+        return app
+
 
     def session_titles(self, chat_user_id, session_id, messages):
         if self.is_new is False:
@@ -118,7 +150,7 @@ respon dengan plain text"""
         })
 
     def ai_starter_template(self, system_message) -> AIMessage:
-        response = ChatOpenAI().invoke([
+        response = self.llm.invoke([
             system_message,
             HumanMessage(
                 content="Mulai pembicaraan berdasarkan konteks diatas seolah kamu yang memulai percakapan ini")
@@ -126,7 +158,7 @@ respon dengan plain text"""
         return response
 
     def invoke(self, messages):
-        response = ChatOpenAI().invoke(messages)
+        response = self.llm.invoke(messages)
         print(messages)
 
         sess = self.get_session("automated", str(uuid.uuid4()))
@@ -141,17 +173,7 @@ respon dengan plain text"""
         return SystemMessage(
             content=message
         )
-
-    def select_model(self, state: AgentState, runtime: Runtime) -> ChatOpenAI:
-        """Choose model based on conversation complexity."""
-        messages = state["messages"]
-        message_count = len(messages)
-
-        if message_count < 10:
-            return ChatOpenAI(model="gpt-4.1-mini").bind_tools(Helper().get('tools'))
-        else:
-            return ChatOpenAI(model="gpt-5").bind_tools(Helper().get('tools'))
-
+    
     def get_session(self, chat_user_id, session_id):
         session = MongoDBChatMessageHistory(
             session_id=chat_user_id + ":" + session_id,
@@ -160,33 +182,3 @@ respon dengan plain text"""
             collection_name="chat_histories",
         )
         return session
-
-    def prompt_template(self):
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", "You are a helpful assistant."),
-                MessagesPlaceholder(variable_name="history"),
-                ("human", "{question}"),
-            ]
-        )
-
-        chain = prompt | ChatOpenAI()
-        return chain
-
-    def vector_store(self, collection):
-        embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
-        return Chroma(
-            collection_name=collection,
-            embedding_function=embeddings,
-        )
-
-    def chain_with_history(self):
-        chain = self.prompt_template()
-        return RunnableWithMessageHistory(
-            chain,
-            lambda session_id: self.get_session(session_id),
-            input_messages_key="question",
-            history_messages_key="history",
-        )
-
-    # This is where we configure the session id

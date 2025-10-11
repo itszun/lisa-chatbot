@@ -10,6 +10,8 @@ gunicorn
 pymongo
 chromadb
 langchain==1.0.0a5
+langchain[openai]
 langchain-openai
 langchain-mongodb
 langchain-chroma
+langgraph

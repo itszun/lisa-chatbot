@@ -2,7 +2,6 @@ from flask import Blueprint, jsonify, request
 import traceback
 # app.py (Versi Final Tanpa Validasi Awal)
 # -*- coding: utf-8 -*-
-from tools_registry import Helper
 from feeder import Feeder
 from dataclasses import dataclass
 import os
@@ -27,6 +26,8 @@ def chat2():
     data = request.get_json(force=True)
     is_new = False
 
+    print("CHAT MASUK")
+
     chat_user_id = (data.get("user") or "").strip()
     user_msg = (data.get("message") or "").strip()
     session_id = (data.get("session_id") or "").strip()
@@ -38,6 +39,7 @@ def chat2():
         response = Lisa(is_new=is_new).chat(chat_user_id, user_msg, session_id)
     except Exception as e:
         print(e)
+        raise e
         tb = e.__traceback__
         # Extract the last frame, which corresponds to the error location
         last_frame = traceback.extract_tb(tb)[-1]
