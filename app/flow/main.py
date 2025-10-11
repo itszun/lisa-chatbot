@@ -10,12 +10,14 @@ def main_flow():
 
     AGENT_REASON="agent_reason"
     ACT="act"
+    SAVE_TOOL_RESPONSE="save_tool_response"
     LAST=-1
 
     def should_continue(state: MessagesState) -> str:
         if not state["messages"][LAST].tool_calls:
             return END
         return ACT
+    
 
     flow = StateGraph(MessagesState)
 
@@ -28,7 +30,6 @@ def main_flow():
         ACT:ACT,
     })
 
-    flow.add_edge(ACT, AGENT_REASON)
 
     app = flow.compile()
 

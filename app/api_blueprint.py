@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, Response
 import traceback
 # app.py (Versi Final Tanpa Validasi Awal)
 # -*- coding: utf-8 -*-
@@ -20,6 +20,20 @@ api_bp = Blueprint('api', __name__, url_prefix='/')
 def index():
     return render_template("index.html")
 
+def format_sse(data: dict) -> str:
+    """Format dictionary data menjadi string SSE."""
+    # JSON dump data-nya dulu
+    import json
+    json_data = json.dumps(data)
+    
+    # Format SSE: data: <json_string>\n\n
+    return f"data: {json_data}\n\n"
+
+def event_stream(response):
+    print("EVENT STREAM")
+    for chunk in response: 
+        print(chunk)
+        yield format_sse(chunk)
 
 @api_bp.route("/api/chat", methods=["POST"])
 def chat2():
@@ -29,6 +43,7 @@ def chat2():
     print("CHAT MASUK")
 
     chat_user_id = (data.get("user") or "").strip()
+    stream = (str(data.get("stream")) or "").strip()
     user_msg = (data.get("message") or "").strip()
     session_id = (data.get("session_id") or "").strip()
     if session_id == "":
@@ -36,7 +51,12 @@ def chat2():
         is_new = True
 
     try:
-        response = Lisa(is_new=is_new).chat(chat_user_id, user_msg, session_id)
+        response = Lisa(is_new=is_new,stream=bool(stream)).chat(chat_user_id, user_msg, session_id)
+        if bool(stream):
+            return Response(
+                event_stream(response),
+                mimetype='text/event-stream'
+            )
     except Exception as e:
         print(e)
         raise e

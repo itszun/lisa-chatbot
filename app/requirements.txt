@@ -14,3 +14,4 @@ langchain-openai
 langchain-mongodb
 langchain-chroma
 langgraph
+langgraph-checkpoint-mongodb

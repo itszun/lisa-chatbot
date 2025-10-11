@@ -20,6 +20,7 @@ from prompt import TemplatePrompt
 
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import MessagesState, StateGraph, END
+import langgraph.checkpoint
 
 
 from dotenv import load_dotenv
@@ -31,14 +32,16 @@ class BaseLisa:
     is_new = False
     tools = []
     llm = None
+    stream = False
 
-    def __init__(self, is_new=False):
+    def __init__(self, is_new=False, stream=False):
         print("LISA INITIATE")
         self.is_new = is_new
         self.tools = Helper().get("tools")
         print("GET LLM")
         print(Helper().get("llm"))
         self.llm = Helper().get("llm")
+        self.stream = stream
 
     def initiate_chat(self, chat_user_id, prompt, ai_message=None, context="HR_ASSISTANT"):
         session_id = str(uuid.uuid4())
@@ -76,17 +79,18 @@ class BaseLisa:
             messages = chat_session.messages
 
         chat_session.add_user_message(user_message)
-        response = self.main_flow(messages).invoke({"messages": [user_message]})
+        response = self.main_flow(chat_session, messages).invoke({"messages": [user_message]}, {"configurable": {"thread": session_id}})
+
         ai_response = response['messages'][-1]
-        chat_session.add_ai_message(ai_response)
 
         self.session_titles(chat_user_id, session_id, chat_session.messages)
         return ai_response
 
-    def run_agent_reasoning(self, messages):
+    def run_agent_reasoning(self, session, messages):
         llm = self.llm
         def reason(state: MessagesState) -> MessagesState:
             response = llm.invoke([*messages, *state['messages']])
+            session.add_message(response)
             return {"messages": [response]}
 
         return reason
@@ -94,20 +98,28 @@ class BaseLisa:
     def tool_node(self):
         return ToolNode(Helper().get('tools'))
     
-    def main_flow(self, messages):
+    def main_flow(self, session, messages):
 
         AGENT_REASON="agent_reason"
         ACT="act"
         LAST=-1
+        SAVE_TOOL_RESPONSE="save_tool_response"
 
         def should_continue(state: MessagesState) -> str:
             if not state["messages"][LAST].tool_calls:
                 return END
             return ACT
+            
+        def save_tool_response(state: MessagesState) -> str:
+            try:
+                session.add_message(state["messages"][-1])
+                return state
+            except Exception as e:
+                return state
 
         flow = StateGraph(MessagesState)
 
-        flow.add_node(AGENT_REASON, self.run_agent_reasoning(messages))
+        flow.add_node(AGENT_REASON, self.run_agent_reasoning(session, messages))
         flow.set_entry_point(AGENT_REASON)
         flow.add_node(ACT, self.tool_node())
 
@@ -116,11 +128,14 @@ class BaseLisa:
             ACT:ACT,
         })
 
-        flow.add_edge(ACT, AGENT_REASON)
+        flow.add_node(SAVE_TOOL_RESPONSE, save_tool_response)
+
+        flow.add_edge(ACT, SAVE_TOOL_RESPONSE)
+        flow.add_edge(SAVE_TOOL_RESPONSE, AGENT_REASON)
 
         app = flow.compile()
 
-        app.get_graph().draw_mermaid_png(output_file_path="flow.png")
+        app.get_graph().draw_mermaid_png(output_file_path="flow2.png")
         return app
 
 
