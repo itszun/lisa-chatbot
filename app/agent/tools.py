@@ -395,7 +395,7 @@ class ScreeningTalentInput(BaseModel):
 @tool(args_schema=ScreeningTalentInput)
 def screening_a_talent(**kwargs) -> dict:
     """
-    Memulai proses Penawaran Job Opening dan Inisiasi Chat Screening kepada Talent.
+    Reach Out ke talent terpilih untuk Penawaran Job Opening dan Inisiasi Chat Screening kepada Talent.
     Tool ini hanya dapat dipanggil setelah record kandidat (candidate_id) berhasil dibuat/di-update.
     """
     input = ScreeningTalentInput(**kwargs);

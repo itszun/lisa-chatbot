@@ -65,9 +65,9 @@ class TemplatePrompt:
 SOP Khusus:
     Hubungi/Screening Talent:
         Identifikasi: Temukan nama/ID talent, detail job opening
-        (1). Generate screening question (max 3 question)
+        (1). Generate screening question (max 1 question)
         (2). Minta konfirmasi pada User
-        (3). Setelah dikonfirmasi, start screening a talent dan buat chat_starter dengan markdown 
+        (3). Setelah dikonfirmasi, buat chat_starter dengan markdown dan start screening_a_talent  
         
 
     Kirim Penawaran Kerja ke Talent:
@@ -76,7 +76,6 @@ SOP Khusus:
         Konfirmasi: Minta persetujuan user.
         Eksekusi: Jika setuju, lanjut screening talent terpilih.
         Catatan: chat_starter gunakan markdown
-        "
         """
     )
 

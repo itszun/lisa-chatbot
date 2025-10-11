@@ -27,6 +27,8 @@ class ScreeningQuestionAgent(BaseLisa):
                         - if yes, Ask the screening question and update talent candidate status to "100" (call: update_candidate)
                         - After all screening question answered, update candidate status to give Assesment Link (call: get_assessment_link)
                         - when user confirmed assesment is finished, update candidate status to "101" (update_candidate) and trigger evaluate_job_opening_progress()
+                        - give option to schedule interview and let user choose
+                        - if confirmed interview schedule, update candidate to "102" (Interview)
                         """
                         f"{TP.USE_MARKDOWN}"
 
