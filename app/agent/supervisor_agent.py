@@ -87,12 +87,10 @@ def supervisor_agent():
             return "fallback_response"
 
     def summarize(state: OverallState):
-        print("AGENT OUTPUT NAON: ")
-        print(state.get('agent_output'))
-        agent_output = state.get('agent_output')
+        agent_command = state.get('agent_command')
         system_msg = SystemMessage(
             content=PromptTemplate.from_template(SUMMARIZE_PROMPT).format(
-                agent_output=agent_output
+                agent_command=agent_command
             )
         )
         response = model.invoke([system_msg])
@@ -105,7 +103,8 @@ def supervisor_agent():
         human = state["user_chat_content"]
         system_msg = SystemMessage(
             content=PromptTemplate.from_template(FALLBACK_PROMPT).format(
-                user_chat_content=human.content
+                user_chat_content=human.content,
+                supervisor_instruction=state.get('agent_command')
             )
         )
         response = model.invoke([system_msg] + messages + [human])

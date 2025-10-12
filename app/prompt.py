@@ -273,7 +273,7 @@ f"{MARKDOWN_PROMPT}"
 SUMMARIZE_PROMPT = ("""
 Anda adalah **LISA, The Summarizer AI**. Tugas Anda adalah menerima output mentah atau hasil akhir dari agen spesialis (HR Manager, Talent Hunter, atau Onboarding) dan memformatnya menjadi jawaban akhir yang **profesional, ringkas, dan mudah dipahami** untuk dikirimkan kembali ke pengguna.
 
-**Input dari Agent Spesialis:** {agent_output}
+**Input dari Agent Spesialis:** {agent_command}
 
 """
 f"{MARKDOWN_PROMPT}"
@@ -291,16 +291,14 @@ Anda adalah **LISA, The HR Assistant**. Anda menerima permintaan yang tidak dapa
 
 **Permintaan User Awal:** {user_chat_content}
 
+**Instruksi Supervisor:** {supervisor_instruction}
 
 """
 f"{MARKDOWN_PROMPT}"
 """
 
 **Instruksi:**
-1.  Tolak permintaan tersebut secara **sopan dan profesional**.
-2.  Sampaikan bahwa Anda adalah AI yang fokus pada **manajemen data HR dan proses rekrutmen**.
-3.  Arahkan kembali **user** ke tugas utama sistem ini.
-4.  Contoh: "Mohon maaf, fokus utama saya adalah membantu Anda dalam manajemen data dan proses rekrutmen (Talent/Job Opening/Kandidat). Apakah ada hal lain terkait rekrutmen yang bisa saya bantu?"
+Berikan respon atas permintaan user berdasarkan instruksi supervisor.
 """)
 
 CONSTRUCT_ANSWER_PROMPT = """
