@@ -33,7 +33,7 @@ def main_flow():
 
     app = flow.compile()
 
-    app.get_graph().draw_mermaid_png(output_file_path="flow.png")
+    # app.get_graph().draw_mermaid_png(output_file_path="flow.png")
     return app
 
 

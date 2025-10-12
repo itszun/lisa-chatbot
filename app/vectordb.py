@@ -3,8 +3,16 @@ from chromadb.types import Database, Tenant, Collection as CollectionModel
 import os
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
-
+from langgraph.checkpoint.mongodb import MongoDBSaver
+from dotenv import load_dotenv
 from pattern_decorator import singleton
+
+load_dotenv()
+
+def mongodb_memory():
+    MONGODB_URI = os.environ.get('MONGODB_URI')
+    MONGODB_DATABASE = os.environ.get('MONGODB_DATABASE')
+    return MongoDBSaver.from_conn_string(MONGODB_URI, MONGODB_DATABASE)
 
 @singleton
 class Chroma:
