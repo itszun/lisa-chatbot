@@ -89,8 +89,9 @@ class Lisa(BaseLisa):
     def new_session(self, chat_user_id, session_id, chatbot_service):
         db = MongoProvider().getDB()
         collection = db.get_collection('user_session')
+        cs = chatbot_service_dict[chatbot_service]
 
-        title = "chatbot_service"
+        title = cs['title']
         
         insert_result = collection.insert_one({
             'chat_user_id': chat_user_id,
@@ -109,7 +110,6 @@ class Lisa(BaseLisa):
             collection_name="chat_histories",
         )
 
-        cs = chatbot_service_dict[chatbot_service]
 
         session.add_message(AIMessage(content=cs['message_opener']))
         return session
