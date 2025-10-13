@@ -52,7 +52,7 @@ def chat2():
         is_new = True
 
     try:
-        response = Lisa(is_new=is_new).chat(chat_user_id, user_msg, session_id)
+        response = Lisa(is_new=is_new).chat2(chat_user_id, user_msg, session_id)
     except Exception as e:
         print(e)
         raise e
@@ -100,6 +100,27 @@ def get_sessions2():
         })
 
     return jsonify(result[0])
+
+
+@api_bp.post("/api/new_session")
+def new_session():
+    data = request.get_json() 
+    chat_user_id = data.get("user")
+    chatbot_service = data.get("chatbot_service")
+    session_id = str(uuid4())
+
+    session = Lisa().new_session(chat_user_id, session_id, chatbot_service)
+
+    response_data = {
+        "user": chat_user_id,
+        "session_id": session_id,
+        "new_session_id": session_id,
+        "answer": session.messages[-1].content,
+    }
+
+
+    return jsonify(response_data)
+
 
 
 @api_bp.get("/api/session/messages")
