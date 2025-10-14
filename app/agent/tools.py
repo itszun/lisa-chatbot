@@ -454,26 +454,6 @@ def get_assessment_link(job_opening_id):
     return f"assessment.altateknologi.com/{job_opening_id}";
 
 
-@tool
-def initiate_a_new_chat(chat_user_id, system_prompt, chat_starter):
-    """
-    Memulai sesi chat baru dengan chat_user_id. setelah ini harus call push_notification
-
-    Args:
-        chat_user_id (str): ID user chat tujuan.
-        system_prompt (str): User prompt untuk memerintah konteks. Jelaskan detail asumsi, objective, persona, behaviour nya.
-        chat_starter (str): Message pertama.
-    """
-    print("=======================================================")
-    print("=======================================================")
-    print(f":: INITIATE A NEW CHAT for \"{chat_user_id}\"")
-    print("=======================================================")
-    print("=======================================================")
-    SubAgent(True).initiate_chat(
-        chat_user_id, 
-        prompt=system_prompt, 
-        ai_message=chat_starter,
-        context=False)
     
 @tool
 def push_notification(chat_user_id, subject, body):
@@ -518,7 +498,6 @@ tools = [
     screening_a_talent,
     evaluate_job_opening_progress,
     get_assessment_link,
-    initiate_a_new_chat,
     push_notification
 ]
 
