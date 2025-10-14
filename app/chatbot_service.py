@@ -9,15 +9,15 @@ chatbot_service_dict = {
         "tools": tools,
     },
     'buat_lowongan_kerja': {
-        "title":"Buat Lowongan Kerja",
+        "title":"HR Assistant - Manajemen Data",
         "system_prompt": HR_ASSISTANT,
-        "message_opener": "Halo! Aku Lisa 👩‍💼 Siap bantu kamu membuat lowongan baru dan mencari kandidat yang sesuai. Posisi apa yang ingin kamu buka hari ini?",
+        "message_opener": "Hai, ini Lisa! Aku siap bantu kamu mengelola data HR — mau update, hapus, atau cek data tertentu dulu?",
         "tools": tools,
     },
     'cari_kandidat_dan_screening': {
-        "title": "Cari Kandidat dan Screening",
+        "title": "Recruitment Assistant - Membuat lowongan dan mencari kandidat",
         "system_prompt": RECRUITMENT_ASSISTANT,
-        "message_opener": "Hai, ini Lisa! Aku siap bantu kamu mengelola data HR — mau update, hapus, atau cek data tertentu dulu?",
+        "message_opener": "Halo! Aku Lisa 👩‍💼 Siap bantu kamu membuat lowongan baru dan mencari kandidat yang sesuai. Posisi apa yang ingin kamu buka hari ini?",
         "tools": tools,
     },
     
